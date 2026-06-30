@@ -1,11 +1,10 @@
-"""Synthesis node — builds the unified LPS signaling network graph.
+"""Synthesis node — builds the unified LPS signaling gene-pathway graph.
 
-Uses NetworkX to build a bipartite gene-pathway graph and identifies hub genes
-(genes shared across multiple pathways/databases). No LLM call — pure graph logic.
+Removed hub_genes (not needed). Focuses on building the bipartite
+gene ↔ pathway graph with provenance (which DB contributed each edge).
 """
 
 from collections import Counter
-from typing import Dict, List
 
 import networkx as nx
 
@@ -16,7 +15,7 @@ def synthesizer_node(state: PipelineState) -> dict:
     raw = state.get("raw_pathways", [])
     id_mapping = state.get("id_mapping", {})
 
-    # Deduplicate pathways
+    # Deduplicate on (source, pathway_id)
     seen = set()
     pathways = []
     for pw in raw:
@@ -29,63 +28,32 @@ def synthesizer_node(state: PipelineState) -> dict:
 
     G = nx.Graph()
 
-    # Node: pathway
     for pw in pathways:
-        G.add_node(
-            pw["pathway_id"],
-            type="pathway",
-            name=pw["pathway_name"],
-            source=pw["source"],
-            description=pw.get("description", ""),
-        )
-
-    # Node: gene; Edge: gene — pathway
-    gene_pathway_count: Dict[str, int] = Counter()
-    gene_db_sources: Dict[str, set] = {}
+        G.add_node(pw["pathway_id"], type="pathway",
+                   name=pw["pathway_name"], source=pw["source"],
+                   description=pw.get("description", ""))
 
     for pw in pathways:
         for gene in pw.get("genes", []):
-            gene_u = gene.upper()
-            if not gene_u:
+            g = gene.upper().strip()
+            if not g:
                 continue
-            if gene_u not in G.nodes:
-                meta = id_mapping.get(gene_u, {})
-                G.add_node(
-                    gene_u,
-                    type="gene",
-                    entrez=meta.get("entrez", ""),
-                    uniprot=meta.get("uniprot", ""),
-                    ensembl=meta.get("ensembl", ""),
-                )
-            G.add_edge(gene_u, pw["pathway_id"], source=pw["source"])
-            gene_pathway_count[gene_u] += 1
-            gene_db_sources.setdefault(gene_u, set()).add(pw["source"])
+            if g not in G:
+                meta = id_mapping.get(g, {})
+                G.add_node(g, type="gene",
+                           entrez=meta.get("entrez", ""),
+                           uniprot=meta.get("uniprot", ""),
+                           ensembl=meta.get("ensembl", ""))
+            G.add_edge(g, pw["pathway_id"], db=pw["source"])
 
-    # Hub genes: appear in pathways from ≥2 different databases
-    hub_genes = sorted(
-        [g for g, sources in gene_db_sources.items() if len(sources) >= 2],
-        key=lambda g: -gene_pathway_count[g],
-    )
+    db_coverage = dict(Counter(pw["source"] for pw in pathways))
 
-    # DB coverage summary
-    db_coverage = Counter(pw["source"] for pw in pathways)
+    nodes = [{"id": n, **{k: str(v) for k, v in data.items()}}
+             for n, data in G.nodes(data=True)]
+    edges = [{"source": u, "target": v, "db": d.get("db", "")}
+             for u, v, d in G.edges(data=True)]
 
-    # Serialise graph for state (LangGraph state must be JSON-serialisable)
-    nodes = [
-        {"id": n, **{k: str(v) for k, v in data.items()}}
-        for n, data in G.nodes(data=True)
-    ]
-    edges = [
-        {"source": u, "target": v, "db": data.get("source", "")}
-        for u, v, data in G.edges(data=True)
-    ]
+    gene_count = sum(1 for n in nodes if n.get("type") == "gene")
+    print(f"  [Synthesizer] {len(pathways)} pathways, {gene_count} genes, {len(edges)} edges")
 
-    print(f"  [Synthesizer] {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-    print(f"  [Synthesizer] {len(hub_genes)} hub genes across ≥2 databases")
-
-    return {
-        "nodes": nodes,
-        "edges": edges,
-        "hub_genes": hub_genes[:50],  # top 50
-        "db_coverage": dict(db_coverage),
-    }
+    return {"nodes": nodes, "edges": edges, "db_coverage": db_coverage}

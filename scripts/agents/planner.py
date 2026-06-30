@@ -1,8 +1,7 @@
-"""Planner agent node — Ch.6 (Planning) + Ch.17 (Reasoning).
+"""Planner agent — Ch.6 Planning.
 
-Iteration 0: generates initial search strategy from the user query.
-Iteration >0: generates targeted search terms to fill coverage gaps.
-Uses agy CLI via call_agy_structured (Pydantic-validated, auto-retry).
+Generates search terms (for Reactome/WikiPathways text search) AND seed genes
+(for KEGG gene-based pathway lookup). On re-runs uses gap info from critic.
 """
 
 from __future__ import annotations
@@ -12,16 +11,19 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
-from scripts.config import DEFAULT_SEARCH_TERMS
+from scripts.config import DEFAULT_SEARCH_TERMS, DEFAULT_SEED_GENES
 from scripts.llm import call_agy_structured
 from scripts.state import PipelineState
 
 
 class PlannerOutput(BaseModel):
     search_terms: List[str] = Field(
-        description="6-10 specific search strings for KEGG, Reactome, WikiPathways"
+        description="6-10 search strings for Reactome and WikiPathways text search"
     )
-    plan: str = Field(description="2-3 sentence description of the retrieval strategy")
+    seed_genes: List[str] = Field(
+        description="10-20 gene symbols (e.g. TLR4, MYD88, TRAF6) for KEGG gene-based lookup"
+    )
+    plan: str = Field(description="2-3 sentence retrieval strategy")
 
 
 def planner_node(state: PipelineState) -> dict:
@@ -33,29 +35,38 @@ def planner_node(state: PipelineState) -> dict:
 
 Goal: {query}
 
-Generate search terms for KEGG, Reactome, and WikiPathways databases.
-Include: LPS/endotoxin receptor names, signalling cascade names, adaptor proteins,
-kinases, transcription factors, and disease contexts (sepsis, macrophage activation).
+Generate:
+1. search_terms: 6-10 text strings for searching Reactome and WikiPathways databases.
+   Examples: "Toll-like receptor signaling", "MyD88 signaling", "NF-kB activation",
+   "innate immune response", "TRIF signaling", "type I interferon"
 
-Examples of good search terms:
-"TLR4 signaling", "MyD88 NF-kB", "TRIF IRF3", "LPS macrophage",
-"innate immunity", "IRAK TRAF6", "NF-kB canonical", "type I interferon"
+2. seed_genes: 10-20 human gene symbols to use for KEGG gene-based pathway lookup.
+   Include: receptors, adaptors, kinases, ubiquitin ligases, transcription factors,
+   and negative regulators relevant to the goal.
+   Examples: TLR4, MYD88, TICAM1, IRAK4, IRAK1, TRAF6, MAP3K7, CHUK, RELA, IRF3
+
+3. plan: brief strategy description.
 """
     else:
         gaps = state.get("coverage_gaps", [])
-        prompt = f"""You are a computational biologist filling gaps in an LPS pathway analysis.
+        extra_genes = state.get("additional_seed_genes", [])
+        extra_terms = state.get("additional_search_terms", [])
+        prompt = f"""You are filling gaps in an LPS pathway analysis.
 
-Previously identified coverage gaps:
+Coverage gaps identified:
 {json.dumps(gaps, indent=2)}
 
-Generate NEW search terms that specifically target these missing components.
-Do NOT repeat previously used terms. Focus on the gaps above.
+Generate NEW (non-overlapping) terms and genes targeting these gaps:
+- search_terms: 4-6 NEW text strings for Reactome/WikiPathways
+- seed_genes: 5-10 NEW gene symbols for KEGG
+- plan: how these address the gaps
 """
 
     result = call_agy_structured(prompt, PlannerOutput)
 
     return {
         "search_terms": result.search_terms or DEFAULT_SEARCH_TERMS,
+        "seed_genes": result.seed_genes or DEFAULT_SEED_GENES,
         "plan": result.plan,
         "iteration": iteration + 1,
     }

@@ -51,17 +51,19 @@ def main():
     initial_state: PipelineState = {
         "query": args.query,
         "search_terms": DEFAULT_SEARCH_TERMS,
+        "seed_genes": DEFAULT_SEED_GENES,
         "plan": "",
         "iteration": 0,
         "raw_pathways": [],
         "id_mapping": {},
         "nodes": [],
         "edges": [],
-        "hub_genes": [],
         "db_coverage": {},
+        "required_components": [],
         "coverage_assessment": "",
         "coverage_gaps": [],
         "additional_search_terms": [],
+        "additional_seed_genes": [],
         "report": "",
         "output_files": [],
     }
@@ -72,14 +74,14 @@ def main():
     print("\n" + "=" * 60)
     print("Pipeline Complete")
     print("=" * 60)
-    print(f"Iterations:     {final_state.get('iteration', 0)}")
-    print(f"DB coverage:    {final_state.get('db_coverage', {})}")
-    print(f"Hub genes:      {final_state.get('hub_genes', [])[:10]} ...")
+    print(f"Iterations:    {final_state.get('iteration', 0)}")
+    print(f"DB coverage:   {final_state.get('db_coverage', {})}")
+    print(f"Genes found:   {sum(1 for n in final_state.get('nodes', []) if n.get('type') == 'gene')}")
     print(f"\nOutput files:")
     for f in final_state.get("output_files", []):
         print(f"  {f}")
 
-    print("\n--- Expert Coverage Assessment ---")
+    print("\n--- Coverage Assessment ---")
     print(final_state.get("coverage_assessment", "(none)"))
 
 

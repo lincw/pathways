@@ -1,7 +1,8 @@
-"""Critic / Reflection agent — Ch.4 (Reflection).
+"""Critic / Reflection agent — Ch.4 Reflection.
 
-Evaluates the current pathway coverage and identifies biological gaps.
-Uses agy CLI via call_agy_structured (Pydantic-validated, auto-retry).
+No hardcoded biology. On iteration 1, the LLM generates the required
+components from the query (stored in state). Subsequent iterations reuse them.
+This makes the pipeline work for any pathway query, not just LPS.
 """
 
 from __future__ import annotations
@@ -15,83 +16,98 @@ from scripts.config import MAX_REFLECTION_ITERATIONS
 from scripts.llm import call_agy_structured
 from scripts.state import PipelineState
 
-REQUIRED_LPS_COMPONENTS = [
-    "TLR4/MD-2 receptor complex",
-    "MyD88-dependent pathway",
-    "TRIF/TICAM1-dependent pathway",
-    "IRAK1/IRAK4 kinase cascade",
-    "TRAF6 ubiquitin ligase",
-    "TAK1 (MAP3K7) activation",
-    "NF-κB canonical pathway",
-    "MAPK cascade (ERK, JNK, p38)",
-    "IRF3 / type I interferon",
-    "PI3K/Akt pathway",
-    "negative regulators (IRAK-M, TOLLIP, SOCS1)",
-    "LPS endosomal signaling",
-]
+
+class ComponentsOutput(BaseModel):
+    required_components: List[str] = Field(
+        description="8-12 specific molecular components a complete analysis must cover"
+    )
 
 
 class CriticOutput(BaseModel):
     coverage_assessment: str = Field(
-        description="2-3 sentence expert assessment of the analysis quality"
+        description="2-3 sentence expert assessment of analysis completeness"
     )
     missing_components: List[str] = Field(
-        description="Required components NOT covered by current pathways"
+        description="Required components NOT yet found in current pathways/genes"
     )
     additional_search_terms: List[str] = Field(
-        description="2-5 specific search terms to find the missing components"
+        description="2-5 text search terms for Reactome/WikiPathways to fill gaps"
+    )
+    additional_seed_genes: List[str] = Field(
+        description="3-8 gene symbols for KEGG gene-based lookup to fill gaps"
     )
     is_sufficient: bool = Field(
-        description="True only if all critical MyD88/TRIF/NF-kB components are present"
+        description="True only if all critical components are represented"
     )
+
+
+def _generate_required_components(query: str) -> List[str]:
+    """Ask the LLM what a complete analysis of this pathway should include."""
+    prompt = f"""You are a molecular biologist. Given this analysis goal:
+"{query}"
+
+List 8-12 specific molecular components (proteins, complexes, or signaling modules)
+that a COMPLETE database analysis MUST cover to be considered comprehensive.
+Be specific: include receptor names, adaptor proteins, kinase cascades,
+transcription factors, and regulatory mechanisms.
+"""
+    result = call_agy_structured(prompt, ComponentsOutput)
+    return result.required_components
 
 
 def critic_node(state: PipelineState) -> dict:
     iteration = state.get("iteration", 1)
-    hub_genes = state.get("hub_genes", [])
-    db_coverage = state.get("db_coverage", {})
+    query = state.get("query", "")
     nodes = state.get("nodes", [])
+    db_coverage = state.get("db_coverage", {})
+
+    # Generate required components once on first critique; reuse afterwards
+    required = state.get("required_components", [])
+    if not required:
+        print("  [Critic] generating evaluation criteria from query...")
+        required = _generate_required_components(query)
 
     pathway_names = [n["name"] for n in nodes if n.get("type") == "pathway"]
-    gene_count = sum(1 for n in nodes if n.get("type") == "gene")
+    all_genes = [n["id"] for n in nodes if n.get("type") == "gene"]
+    gene_count = len(all_genes)
 
-    prompt = f"""You are an expert immunologist reviewing a computational LPS signalling pathway analysis.
+    prompt = f"""You are an expert molecular biologist reviewing a pathway analysis.
 
-Current analysis summary:
-- Total pathways found: {len(pathway_names)}
-- Total genes/proteins: {gene_count}
+Analysis goal: {query}
+
+Current results:
+- Pathways found: {len(pathway_names)}
+- Genes/proteins found: {gene_count}
 - Database coverage: {json.dumps(db_coverage)}
-- Top hub genes (cross-database): {hub_genes[:20]}
-- Pathway names found: {json.dumps(pathway_names[:25])}
+- Sample pathway names: {json.dumps(pathway_names[:20])}
+- Sample genes found: {json.dumps(sorted(all_genes)[:40])}
 
-Required LPS signalling components to cover:
-{json.dumps(REQUIRED_LPS_COMPONENTS, indent=2)}
+Required components for a complete analysis:
+{json.dumps(required, indent=2)}
 
-Evaluate whether each required component is represented in the pathway names or hub genes.
-Be strict — mark is_sufficient as false if any critical MyD88/TRIF/NF-kB/IRF3 component is missing.
+For each required component, check whether it is represented in the pathway names
+or gene list above. Mark is_sufficient=false if any critical signaling component is absent.
 """
 
     result = call_agy_structured(prompt, CriticOutput)
 
-    print(
-        f"  [Critic] iteration={iteration}, "
-        f"gaps={len(result.missing_components)}, "
-        f"sufficient={result.is_sufficient}"
-    )
+    print(f"  [Critic] iteration={iteration}, gaps={len(result.missing_components)}, "
+          f"sufficient={result.is_sufficient}")
 
     return {
+        "required_components": required,
         "coverage_assessment": result.coverage_assessment,
         "coverage_gaps": result.missing_components,
         "additional_search_terms": result.additional_search_terms,
+        "additional_seed_genes": result.additional_seed_genes,
     }
 
 
 def route_after_critic(state: PipelineState) -> str:
-    """Reflection loop routing — re-plan if gaps remain and budget allows (Ch.4)."""
+    """Re-plan if gaps remain and reflection budget allows (Ch.4)."""
     iteration = state.get("iteration", 1)
     gaps = state.get("coverage_gaps", [])
-
     if gaps and iteration <= MAX_REFLECTION_ITERATIONS:
-        print(f"  [Router] reflection {iteration} — re-querying for {len(gaps)} gap(s)")
+        print(f"  [Router] reflection {iteration} — filling {len(gaps)} gap(s)")
         return "planner"
     return "reporter"
