@@ -33,10 +33,11 @@ def reactome_agent_node(state: PipelineState) -> dict:
 
 
 def signor_agent_node(state: PipelineState) -> dict:
+    query = state.get("query", "")
     search_terms = state.get("search_terms", [])
-    print(f"  [SIGNOR] querying {len(search_terms)} terms...", flush=True)
+    print(f"  [SIGNOR] asking LLM to select relevant pathways...", flush=True)
     try:
-        pathways = signor_tools.fetch_signor_pathways(search_terms)
+        pathways = signor_tools.fetch_signor_pathways(query, search_terms)
     except Exception as exc:
         print(f"  [SIGNOR] ERROR: {exc}", flush=True)
         pathways = []

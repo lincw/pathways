@@ -26,12 +26,15 @@ def id_mapper_node(state: PipelineState) -> dict:
     all_genes = collect_all_genes(unique_pathways)
     print(f"  [ID Mapper] mapping {len(all_genes)} unique gene symbols...")
 
-    # Batch in chunks of 200 (MyGene.info limit)
+    # Batch in chunks of 100 — MyGene.info POST body can grow large at 200
     mapping = {}
-    chunk_size = 200
+    chunk_size = 100
     for i in range(0, len(all_genes), chunk_size):
         chunk = all_genes[i : i + chunk_size]
-        mapping.update(map_gene_symbols(chunk))
+        try:
+            mapping.update(map_gene_symbols(chunk))
+        except Exception as exc:
+            print(f"  [ID Mapper] chunk {i//chunk_size + 1} failed: {exc}", flush=True)
 
     print(f"  [ID Mapper] successfully mapped {len(mapping)} genes")
 

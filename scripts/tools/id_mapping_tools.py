@@ -22,7 +22,7 @@ def map_gene_symbols(symbols: List[str]) -> Dict[str, Dict]:
         return {}
 
     resp = requests.post(
-        f"{MYGENE_BASE}/gene/query",
+        f"{MYGENE_BASE}/query",   # correct batch endpoint (not /gene/query)
         data={
             "q": ",".join(symbols),
             "scopes": "symbol",
