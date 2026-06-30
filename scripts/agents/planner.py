@@ -61,7 +61,8 @@ Generate NEW (non-overlapping) terms and genes targeting these gaps:
 - plan: how these address the gaps
 """
 
-    result = call_agy_structured(prompt, PlannerOutput)
+    label = "Planner: gap-fill query..." if iteration > 0 else "Planner: generating search strategy..."
+    result = call_agy_structured(prompt, PlannerOutput, desc=label)
 
     return {
         "search_terms": result.search_terms,

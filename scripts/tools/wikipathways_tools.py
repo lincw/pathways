@@ -124,6 +124,7 @@ def fetch_lps_pathways(search_terms: List[str]) -> List[PathwayEntry]:
         if not wp_id or wp_id in seen_ids:
             continue
         seen_ids.add(wp_id)
+        print(f"  [WikiPathways] {wp_id}: {match['name'][:70]}", flush=True)
         try:
             genes = get_wikipathways_genes(wp_id)
             entries.append(PathwayEntry(

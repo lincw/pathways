@@ -51,7 +51,7 @@ that a COMPLETE database analysis MUST cover to be considered comprehensive.
 Be specific: include receptor names, adaptor proteins, kinase cascades,
 transcription factors, and regulatory mechanisms.
 """
-    result = call_agy_structured(prompt, ComponentsOutput)
+    result = call_agy_structured(prompt, ComponentsOutput, desc="Critic: defining evaluation checklist...")
     return result.required_components
 
 
@@ -89,7 +89,7 @@ For each required component, check whether it is represented in the pathway name
 or gene list above. Mark is_sufficient=false if any critical signaling component is absent.
 """
 
-    result = call_agy_structured(prompt, CriticOutput)
+    result = call_agy_structured(prompt, CriticOutput, desc=f"Critic: evaluating coverage (iteration {iteration})...")
 
     print(f"  [Critic] iteration={iteration}, gaps={len(result.missing_components)}, "
           f"sufficient={result.is_sufficient}")

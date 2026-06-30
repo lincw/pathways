@@ -7,3 +7,4 @@ matplotlib
 python-dotenv
 pydantic
 tenacity
+rich

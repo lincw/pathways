@@ -114,7 +114,7 @@ Use this structure:
 Use gene symbols in **bold**. Show signal flow with → arrows.
 Fill in only what the evidence supports; note any gaps honestly.
 """
-    report_text = call_agy(prompt)
+    report_text = call_agy(prompt, desc="Reporter: synthesizing pathway narrative...")
 
     report_file = out_dir / "report.md"
     report_file.write_text(report_text, encoding="utf-8")

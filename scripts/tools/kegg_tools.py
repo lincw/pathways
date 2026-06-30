@@ -102,7 +102,9 @@ def fetch_lps_pathways(seed_genes: List[str]) -> List[PathwayEntry]:
     seen_pathway_ids: Set[str] = set()
     entries: List[PathwayEntry] = []
 
-    for gene in seed_genes:
+    total = len(seed_genes)
+    for i, gene in enumerate(seed_genes, 1):
+        print(f"  [KEGG] {i}/{total} {gene}...", flush=True)
         kegg_id = _get_kegg_gene_id(gene)
         if not kegg_id:
             continue

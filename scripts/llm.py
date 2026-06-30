@@ -23,6 +23,7 @@ from typing import Type
 from pydantic import BaseModel, ValidationError
 
 from scripts.config import AGY_TIMEOUT
+from scripts.progress import spinner as _spinner
 
 _MAX_TRIES = 3
 
@@ -178,19 +179,24 @@ def _repair_hint(exc: ValidationError) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
-def call_agy(prompt: str, timeout: int = AGY_TIMEOUT) -> str:
-    """Call `agy -p prompt` and return the text response."""
+def call_agy(prompt: str, timeout: int = AGY_TIMEOUT, desc: str | None = None) -> str:
+    """Call `agy -p prompt` and return the text response.
+
+    Pass ``desc`` to show an animated spinner while the CLI runs — useful for
+    long LLM calls where the user otherwise sees no activity.
+    """
     exe = _find_cli("agy", "AGY_CLI_PATH")
     if not exe:
         raise RuntimeError(
             "agy CLI not found. Install antigravity and ensure it is on PATH, "
             "or set AGY_CLI_PATH=/path/to/agy."
         )
-    proc = _run_process(
-        [exe, "-p", _safe_arg(prompt)],
-        env=os.environ.copy(),
-        timeout=timeout,
-    )
+    with _spinner(desc):
+        proc = _run_process(
+            [exe, "-p", _safe_arg(prompt)],
+            env=os.environ.copy(),
+            timeout=timeout,
+        )
     if proc.returncode != 0:
         raise RuntimeError(f"agy CLI failed (rc={proc.returncode}): {proc.stderr.strip()[:300]}")
     return (proc.stdout or "").strip()
@@ -201,6 +207,7 @@ def call_agy_structured(
     schema: Type[BaseModel],
     timeout: int = AGY_TIMEOUT,
     max_tries: int = _MAX_TRIES,
+    desc: str | None = None,
 ) -> BaseModel:
     """Call agy with a JSON Schema instruction and validate against a Pydantic model.
 
@@ -213,7 +220,7 @@ def call_agy_structured(
     last_raw = ""
 
     for _ in range(max(1, max_tries)):
-        raw = call_agy(current_prompt, timeout=timeout)
+        raw = call_agy(current_prompt, timeout=timeout, desc=desc)
         last_raw = raw
         json_text = _extract_json(raw)
         try:
