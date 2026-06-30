@@ -1,0 +1,9 @@
+langgraph
+langchain-core
+requests
+networkx
+pandas
+matplotlib
+python-dotenv
+pydantic
+tenacity
