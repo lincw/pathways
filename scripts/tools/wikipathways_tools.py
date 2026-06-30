@@ -34,12 +34,25 @@ def _sparql(query: str) -> dict:
 
 
 def search_wikipathways(search_terms: List[str]) -> List[dict]:
-    """Search WikiPathways for human pathways whose title matches any term."""
-    # Build FILTER with CONTAINS conditions (limit terms to avoid huge queries)
-    terms = search_terms[:8]
+    """Search WikiPathways for human pathways whose title matches any keyword."""
+    # Extract individual meaningful words from all search terms
+    stopwords = {"and", "the", "in", "of", "a", "an", "to", "is", "for", "by", "with"}
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for term in search_terms:
+        for word in re.split(r"[\s\-/]+", term.lower()):
+            word = re.sub(r"[^a-z0-9κβα]", "", word)
+            if len(word) >= 3 and word not in stopwords and word not in seen:
+                seen.add(word)
+                keywords.append(word)
+
+    if not keywords:
+        return []
+
+    # Limit to 12 keywords to keep the SPARQL query manageable
     filters = " || ".join(
-        f'CONTAINS(LCASE(STR(?title)), "{t.lower().split()[0]}")'
-        for t in terms
+        f'CONTAINS(LCASE(STR(?title)), "{kw}")'
+        for kw in keywords[:12]
     )
     query = f"""
 PREFIX wp:      <http://vocabularies.wikipathways.org/wp#>

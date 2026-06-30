@@ -115,9 +115,8 @@ def fetch_lps_pathways(seed_genes: List[str]) -> List[PathwayEntry]:
             seen_pathway_ids.add(pid)
             try:
                 raw = _kegg_get(f"/get/{pid}")
-                genes = _get_pathway_genes(pid)  # parse from already-fetched raw below
                 name, desc = _get_pathway_name_and_desc(pid, raw)
-                # re-parse genes from the raw we already have
+                # Parse genes directly from the already-fetched flat file
                 gene_list = []
                 in_section = False
                 for line in raw.splitlines():
@@ -137,8 +136,8 @@ def fetch_lps_pathways(seed_genes: List[str]) -> List[PathwayEntry]:
                     description=desc,
                 ))
                 time.sleep(0.3)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"  [KEGG] skipping {pid}: {exc}", flush=True)
 
     print(f"  [KEGG] {len(seed_genes)} seed genes → {len(entries)} pathways")
     return entries
