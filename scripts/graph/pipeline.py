@@ -1,8 +1,8 @@
-"""LangGraph pipeline assembly for the LPS signaling pathway project.
+"""LangGraph pipeline assembly for the signaling pathway project.
 
 Design patterns from "Agentic Design Patterns":
   Ch.1  Prompt Chaining     — sequential nodes (planner → id_mapper → synthesizer → critic → reporter)
-  Ch.3  Parallelization     — Send fan-out to kegg/reactome/wikipathways agents simultaneously
+  Ch.3  Parallelization     — Send fan-out to kegg/reactome/signor agents simultaneously
   Ch.4  Reflection          — critic → conditional edge back to planner if coverage gaps remain
   Ch.5  Tool Use            — each tool module wraps a real API endpoint
   Ch.6  Planning            — planner_node generates structured search strategy
@@ -10,9 +10,9 @@ Design patterns from "Agentic Design Patterns":
 
 Graph topology:
   START → planner
-        → [Send] → kegg_agent ──┐
-                 → reactome_agent ─┤→ id_mapper → synthesizer → critic
-                 → wikipathways_agent ┘
+        → [Send] → kegg_agent ─────┐
+                 → reactome_agent ──┤→ id_mapper → synthesizer → critic
+                 → signor_agent ────┘
   critic → (if gaps & budget) → planner   [reflection loop]
          → (else)             → reporter → END
 """
@@ -24,7 +24,7 @@ from scripts.agents.critic import critic_node, route_after_critic
 from scripts.agents.db_agents import (
     kegg_agent_node,
     reactome_agent_node,
-    wikipathways_agent_node,
+    signor_agent_node,
 )
 from scripts.agents.id_mapper import id_mapper_node
 from scripts.agents.planner import planner_node
@@ -38,7 +38,7 @@ def _dispatch_to_db_agents(state: PipelineState):
     return [
         Send("kegg_agent", state),
         Send("reactome_agent", state),
-        Send("wikipathways_agent", state),
+        Send("signor_agent", state),
     ]
 
 
@@ -49,7 +49,7 @@ def build_pipeline() -> "CompiledGraph":
     builder.add_node("planner", planner_node)
     builder.add_node("kegg_agent", kegg_agent_node)
     builder.add_node("reactome_agent", reactome_agent_node)
-    builder.add_node("wikipathways_agent", wikipathways_agent_node)
+    builder.add_node("signor_agent", signor_agent_node)
     builder.add_node("id_mapper", id_mapper_node)
     builder.add_node("synthesizer", synthesizer_node)
     builder.add_node("critic", critic_node)
@@ -67,7 +67,7 @@ def build_pipeline() -> "CompiledGraph":
     # LangGraph waits for ALL incoming branches before running the join node
     builder.add_edge("kegg_agent", "id_mapper")
     builder.add_edge("reactome_agent", "id_mapper")
-    builder.add_edge("wikipathways_agent", "id_mapper")
+    builder.add_edge("signor_agent", "id_mapper")
 
     # Sequential processing chain (Ch.1 Prompt Chaining)
     builder.add_edge("id_mapper", "synthesizer")

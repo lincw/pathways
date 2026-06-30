@@ -1,11 +1,11 @@
 """Parallel database agent nodes — Ch.3 Parallelization.
 
 KEGG uses seed_genes (gene-based pathway lookup).
-Reactome and WikiPathways use search_terms (text search).
+Reactome and SIGNOR use search_terms (text/keyword search).
 """
 
 from scripts.state import PipelineState
-from scripts.tools import kegg_tools, reactome_tools, wikipathways_tools
+from scripts.tools import kegg_tools, reactome_tools, signor_tools
 
 
 def kegg_agent_node(state: PipelineState) -> dict:
@@ -32,13 +32,13 @@ def reactome_agent_node(state: PipelineState) -> dict:
     return {"raw_pathways": pathways}
 
 
-def wikipathways_agent_node(state: PipelineState) -> dict:
+def signor_agent_node(state: PipelineState) -> dict:
     search_terms = state.get("search_terms", [])
-    print(f"  [WikiPathways] querying {len(search_terms)} terms...", flush=True)
+    print(f"  [SIGNOR] querying {len(search_terms)} terms...", flush=True)
     try:
-        pathways = wikipathways_tools.fetch_lps_pathways(search_terms)
+        pathways = signor_tools.fetch_signor_pathways(search_terms)
     except Exception as exc:
-        print(f"  [WikiPathways] ERROR: {exc}", flush=True)
+        print(f"  [SIGNOR] ERROR: {exc}", flush=True)
         pathways = []
-    print(f"  [WikiPathways] found {len(pathways)} pathways", flush=True)
+    print(f"  [SIGNOR] found {len(pathways)} pathways", flush=True)
     return {"raw_pathways": pathways}

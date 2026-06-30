@@ -1,6 +1,6 @@
-# LPS Signaling Pathway Agentic Pipeline
+# Signaling Pathway Agentic Pipeline
 
-An agentic AI pipeline that systematically maps intracellular signaling pathways from multiple pathway databases. Designed for LPS/TLR4 but works for any signaling query (TNF-alpha, IL-6, etc.).
+An agentic AI pipeline that systematically maps intracellular signaling pathways from multiple pathway databases. Takes any natural-language query — LPS/TLR4, TNF-alpha, IL-6 JAK-STAT, EGFR, etc. — and returns an integrated, narrative-form pathway report.
 
 ## Architecture
 
@@ -37,10 +37,8 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-# Default query (LPS in human macrophages)
-python -m scripts.main
-
-# Custom query — works for any signaling pathway
+# Provide any natural-language query
+python -m scripts.main --query "LPS intracellular signaling pathway in human macrophages"
 python -m scripts.main --query "TNF-alpha intracellular signaling in human endothelial cells"
 python -m scripts.main --query "IL-6 JAK-STAT signaling in hepatocytes"
 
@@ -71,15 +69,15 @@ The pipeline prints per-step progress while running:
 
 ## Database coverage
 
-| Database | API approach |
-|----------|-------------|
-| KEGG | Gene-based lookup: seed gene → KEGG gene ID → pathway IDs → flat file parse |
-| Reactome | ContentService REST: text search → `/data/participants/{id}` for genes |
-| WikiPathways | SPARQL endpoint: keyword FILTER on pathway title → `wp:GeneProduct` labels |
+| Database | Strength | API approach |
+|----------|----------|-------------|
+| **KEGG** | Broad pathway coverage, stable IDs | Gene-based: seed gene → gene ID → pathway IDs → flat file parse |
+| **Reactome** | Deep human signaling, curated hierarchy | ContentService REST: text search → `/data/participants/{id}` |
+| **SIGNOR** | Causal signaling edges (who activates/inhibits whom + mechanism) | REST: keyword filter on pathway list → `/api/pathway/{id}/relations/` |
 
 ## Reflection loop
 
-After the three DB agents run in parallel, the **Critic** agent checks coverage against a query-specific checklist it generates itself (no hardcoded biology). If gaps remain and the iteration budget allows (`MAX_REFLECTION_ITERATIONS` in `config.py`), the **Planner** reruns with gap-targeted terms and genes.
+After the three DB agents run in parallel, the **Critic** agent checks coverage against a query-specific checklist it generates from scratch for each query (no hardcoded biology). If gaps remain and the iteration budget allows (`MAX_REFLECTION_ITERATIONS` in `config.py`), the **Planner** reruns with gap-targeted terms and genes.
 
 ## Configuration
 
