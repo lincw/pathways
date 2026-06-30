@@ -189,21 +189,30 @@ The critic agent checks these 12 required components:
 ## How to Run
 
 ```bash
-# 1. Install dependencies
 cd ~/gdrive/01_Going_Projects/LPS_signaling_pathway
+
+# 1. Create and activate virtual environment (one-time setup)
+python3 -m venv .venv
+source .venv/bin/activate          # macOS / Linux
+# .venv\Scripts\activate           # Windows
+
+# 2. Install dependencies into the venv
 pip install -r requirements.txt
 
-# 2. Run with default query
+# 3. Run with default query
 python -m scripts.main
 
-# 3. Run with custom query
+# 4. Run with custom query
 python -m scripts.main --query "LPS-induced NF-kB and IRF3 in human monocytes"
 
-# 4. Show pipeline graph topology
+# 5. Show pipeline graph topology
 python -m scripts.main --visualise
 
-# 5. Outputs are saved to results/<timestamp>/
+# 6. Outputs are saved to results/<timestamp>/
 ls results/
+
+# Deactivate venv when done
+deactivate
 ```
 
 ---
