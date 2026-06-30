@@ -1,19 +1,28 @@
 """SIGNOR REST API tools.
 
 SIGNOR (SIGnaling Network Open Resource) provides curated causal signaling
-relationships with annotated effect (up/down-regulates) and mechanism
+relationships annotated with effect (up/down-regulates) and mechanism
 (phosphorylation, binding, ubiquitination, etc.).
 
-Unlike KEGG/Reactome which list genes per pathway, SIGNOR records HOW
-proteins regulate each other — the directed edges are what makes it
-valuable for signaling research.
+Real API (TSV/PHP — not JSON/REST):
+  List pathways:    GET /getPathwayData.php?description
+                    → TSV: sig_id | path_name | path_description | path_curator
+  Pathway relations: GET /getPathwayData.php?pathway={id}&relations=only
+                    → TSV: pathway_id | pathway_name | entitya | regulator_location
+                           | typea | ida | databasea | entityb | target_location
+                           | typeb | idb | databaseb | effect | mechanism
+                           | residue | sequence | tax_id | ...
 
-Flow:
-  search_terms → keyword filter on SIGNOR pathway name/description
-               → fetch causal relations per matched pathway (/api/pathway/{id}/relations/)
-               → extract human protein gene symbols from entitya / entityb
+Column indices (0-based) used for gene extraction:
+  2  = entitya   (gene symbol / family name)
+  4  = typea     ("protein", "proteinfamily", "complex", "chemical", ...)
+  7  = entityb
+  9  = typeb
+  16 = tax_id    (9606 for human)
 """
 
+import csv
+import io
 import re
 import time
 from typing import List, Set
@@ -25,68 +34,81 @@ from scripts.config import SIGNOR_BASE
 from scripts.state import PathwayEntry
 
 _GENE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,14}$")
+_PROTEIN_TYPES = {"protein", "proteinfamily"}
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-def _get(endpoint: str) -> list | dict:
+def _fetch_tsv(endpoint: str) -> List[List[str]]:
+    """Fetch a SIGNOR TSV endpoint and return rows as lists of strings."""
     resp = requests.get(f"{SIGNOR_BASE}{endpoint}", timeout=30)
     resp.raise_for_status()
-    return resp.json()
-
-
-def _unwrap_list(data: list | dict, fallback_keys=("results", "pathways", "relations", "data")) -> List[dict]:
-    """Return a list from a JSON response whether it's a bare list or wrapped in a key."""
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in fallback_keys:
-            if isinstance(data.get(key), list):
-                return data[key]
-    return []
+    # SIGNOR descriptions occasionally contain bare \r — strip them so csv.reader
+    # doesn't treat them as record separators inside unquoted fields.
+    clean = resp.text.replace("\r", " ")
+    reader = csv.reader(io.StringIO(clean), delimiter="\t")
+    rows = list(reader)
+    # Skip header row
+    return rows[1:] if rows else []
 
 
 def _pathway_list() -> List[dict]:
-    return _unwrap_list(_get("/api/pathway/"))
+    """Return all SIGNOR pathways as list of {id, name, description} dicts."""
+    rows = _fetch_tsv("/getPathwayData.php?description")
+    pathways = []
+    for row in rows:
+        if len(row) < 2:
+            continue
+        pathways.append({
+            "id":   row[0].strip(),
+            "name": row[1].strip(),
+            "desc": row[2].strip() if len(row) > 2 else "",
+        })
+    return pathways
 
 
-def _pathway_relations(pathway_id: str) -> List[dict]:
-    return _unwrap_list(_get(f"/api/pathway/{pathway_id}/relations/"))
+def _pathway_relations(pathway_id: str) -> List[List[str]]:
+    """Return all relation rows for a SIGNOR pathway."""
+    return _fetch_tsv(f"/getPathwayData.php?pathway={pathway_id}&relations=only")
 
 
-def _genes_from_relations(relations: List[dict]) -> List[str]:
-    """Extract unique human protein gene symbols from SIGNOR relation records.
+def _genes_from_rows(rows: List[List[str]]) -> List[str]:
+    """Extract unique human protein gene symbols from SIGNOR relation rows.
 
-    Handles both nested format ({'entitya': {'name': 'TLR4', 'type': 'protein'}})
-    and flat format ({'entitya_name': 'TLR4', 'entitya_type': 'protein'}).
+    Columns: 2=entitya, 4=typea, 7=entityb, 9=typeb, 16=tax_id.
+    Accepts type "protein" and "proteinfamily"; skips chemicals, complexes,
+    stimuli, phenotypes. Applies gene-symbol regex to filter display names
+    that are not gene symbols (e.g. "14-3-3 protein beta/alpha").
     """
     genes: Set[str] = set()
-    for rel in relations:
-        tax = str(rel.get("tax_id") or rel.get("taxid") or "9606")
-        if tax not in ("9606", ""):
+    for row in rows:
+        if len(row) < 17:
             continue
-        for prefix in ("entitya", "entityb"):
-            nested = rel.get(prefix)
-            if isinstance(nested, dict):
-                etype = (nested.get("type") or "protein").lower()
-                name = (nested.get("name") or nested.get("gene_name") or "").strip()
-            else:
-                etype = (rel.get(f"{prefix}_type") or "protein").lower()
-                name = (rel.get(f"{prefix}_name") or "").strip()
-            # Accept protein and proteinfamily; skip stimuli, phenotype, chemical
-            if etype not in ("protein", "proteinfamily", ""):
+        tax = row[16].strip()
+        if tax and tax != "9606":
+            continue
+        for entity, etype in ((row[2], row[4]), (row[7], row[9])):
+            if etype.strip().lower() not in _PROTEIN_TYPES:
                 continue
+            name = entity.strip()
             if name and _GENE_RE.match(name):
                 genes.add(name)
     return sorted(genes)
 
 
 def _build_keywords(search_terms: List[str]) -> List[str]:
-    stopwords = {"and", "the", "in", "of", "a", "an", "to", "is", "for", "by", "with"}
+    """Extract search keywords from planner-generated terms.
+
+    Split on whitespace only (not hyphens) so that "NF-kB" stays together
+    and cleans to "nfkb" (4 chars) rather than being dropped as "nf" + "kb"
+    (2 chars each, below the minimum).
+    """
+    stopwords = {"and", "the", "in", "of", "a", "an", "to", "is", "for", "by", "with",
+                 "signaling", "pathway", "response", "activation", "dependent"}
     keywords: list[str] = []
     seen: set[str] = set()
     for term in search_terms:
-        for word in re.split(r"[\s\-/]+", term.lower()):
-            word = re.sub(r"[^a-z0-9κβα]", "", word)
+        for word in term.lower().split():           # split on whitespace only
+            word = re.sub(r"[^a-z0-9]", "", word)  # strip hyphens, parens, etc.
             if len(word) >= 3 and word not in stopwords and word not in seen:
                 seen.add(word)
                 keywords.append(word)
@@ -94,7 +116,7 @@ def _build_keywords(search_terms: List[str]) -> List[str]:
 
 
 def fetch_signor_pathways(search_terms: List[str]) -> List[PathwayEntry]:
-    """Search SIGNOR pathway list by keyword and return PathwayEntry list."""
+    """Keyword-match SIGNOR pathway names/descriptions and fetch their relations."""
     try:
         all_pathways = _pathway_list()
     except Exception as exc:
@@ -105,13 +127,18 @@ def fetch_signor_pathways(search_terms: List[str]) -> List[PathwayEntry]:
     if not keywords:
         return []
 
-    matched = []
+    # Score: 2 pts per keyword hit in name, 1 pt in description.
+    # Normalize both sides by stripping non-alphanumeric so "NF-KB Canonical"
+    # matches keyword "nfkb" (which came from search term "NF-kB ...").
+    scored = []
     for pw in all_pathways:
-        pw_id = (pw.get("id") or pw.get("signor_id") or pw.get("pathway_id") or "").strip()
-        pw_name = (pw.get("name") or pw.get("pathway_name") or pw.get("label") or pw_id).strip()
-        text = (pw_name + " " + (pw.get("description") or pw.get("abstract") or "")).lower()
-        if any(kw in text for kw in keywords):
-            matched.append({"id": pw_id, "name": pw_name})
+        name_n = re.sub(r"[^a-z0-9 ]", "", pw["name"].lower())
+        desc_n = re.sub(r"[^a-z0-9 ]", "", pw["desc"].lower())
+        score = sum(2 * (kw in name_n) + (kw in desc_n) for kw in keywords)
+        if score > 0:
+            scored.append((score, pw))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    matched = [pw for _, pw in scored[:15]]  # cap at 15 pathways
 
     if not matched:
         print(f"  [SIGNOR] 0 pathways matched keywords: {keywords[:8]}", flush=True)
@@ -119,20 +146,19 @@ def fetch_signor_pathways(search_terms: List[str]) -> List[PathwayEntry]:
 
     entries: List[PathwayEntry] = []
     for pw in matched:
-        pw_id, pw_name = pw["id"], pw["name"]
-        print(f"  [SIGNOR] {pw_id}: {pw_name[:70]}", flush=True)
+        print(f"  [SIGNOR] {pw['id']}: {pw['name']}", flush=True)
         try:
-            relations = _pathway_relations(pw_id)
-            genes = _genes_from_relations(relations)
+            rows = _pathway_relations(pw["id"])
+            genes = _genes_from_rows(rows)
             entries.append(PathwayEntry(
                 source="SIGNOR",
-                pathway_id=pw_id,
-                pathway_name=pw_name,
+                pathway_id=pw["id"],
+                pathway_name=pw["name"],
                 genes=genes,
-                description="",
+                description=pw["desc"][:200],
             ))
             time.sleep(0.3)
         except Exception as exc:
-            print(f"  [SIGNOR] skipping {pw_id}: {exc}", flush=True)
+            print(f"  [SIGNOR] skipping {pw['id']}: {exc}", flush=True)
 
     return entries
