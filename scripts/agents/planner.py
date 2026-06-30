@@ -11,7 +11,6 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
-from scripts.config import DEFAULT_SEARCH_TERMS, DEFAULT_SEED_GENES
 from scripts.llm import call_agy_structured
 from scripts.state import PipelineState
 
@@ -65,8 +64,8 @@ Generate NEW (non-overlapping) terms and genes targeting these gaps:
     result = call_agy_structured(prompt, PlannerOutput)
 
     return {
-        "search_terms": result.search_terms or DEFAULT_SEARCH_TERMS,
-        "seed_genes": result.seed_genes or DEFAULT_SEED_GENES,
+        "search_terms": result.search_terms,
+        "seed_genes": result.seed_genes,
         "plan": result.plan,
         "iteration": iteration + 1,
     }

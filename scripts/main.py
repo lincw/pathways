@@ -8,10 +8,7 @@ Usage:
 """
 
 import argparse
-import sys
-from pprint import pprint
 
-from scripts.config import DEFAULT_SEARCH_TERMS
 from scripts.graph.pipeline import pipeline
 from scripts.state import PipelineState
 
@@ -50,8 +47,8 @@ def main():
 
     initial_state: PipelineState = {
         "query": args.query,
-        "search_terms": DEFAULT_SEARCH_TERMS,
-        "seed_genes": DEFAULT_SEED_GENES,
+        "search_terms": [],   # planner fills these from the query
+        "seed_genes": [],     # planner fills these from the query
         "plan": "",
         "iteration": 0,
         "raw_pathways": [],
