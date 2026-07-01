@@ -13,6 +13,35 @@ from scripts.graph.pipeline import pipeline
 from scripts.state import PipelineState
 
 
+def build_initial_state(query: str) -> PipelineState:
+    """Fresh pipeline state for one run of the given query."""
+    return {
+        "query": query,
+        "search_terms": [],   # planner fills these from the query
+        "seed_genes": [],     # planner fills these from the query
+        "plan": "",
+        "iteration": 0,
+        "seed_gene_pool": [],
+        "raw_pathways": [],
+        "filtered_pathways": None,
+        "filter_stats": {},
+        "id_mapping": {},
+        "nodes": [],
+        "edges": [],
+        "robust_edges": [],
+        "db_coverage": {},
+        "network_stats": {},
+        "required_components": [],
+        "coverage_assessment": "",
+        "coverage_gaps": [],
+        "additional_search_terms": [],
+        "additional_seed_genes": [],
+        "validation": {},
+        "report": "",
+        "output_files": [],
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Signaling Pathway Agentic Pipeline (LangGraph, pluggable LLM CLI)"
@@ -72,31 +101,7 @@ def main():
         print(f"  WARNING: '{cli['name']}' not found on PATH — LLM calls will fail.")
     print()
 
-    initial_state: PipelineState = {
-        "query": args.query,
-        "search_terms": [],   # planner fills these from the query
-        "seed_genes": [],     # planner fills these from the query
-        "plan": "",
-        "iteration": 0,
-        "seed_gene_pool": [],
-        "raw_pathways": [],
-        "filtered_pathways": None,
-        "filter_stats": {},
-        "id_mapping": {},
-        "nodes": [],
-        "edges": [],
-        "robust_edges": [],
-        "db_coverage": {},
-        "network_stats": {},
-        "required_components": [],
-        "coverage_assessment": "",
-        "coverage_gaps": [],
-        "additional_search_terms": [],
-        "additional_seed_genes": [],
-        "validation": {},
-        "report": "",
-        "output_files": [],
-    }
+    initial_state = build_initial_state(args.query)
 
     print("Running pipeline...\n")
     final_state = pipeline.invoke(initial_state)

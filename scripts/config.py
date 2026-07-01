@@ -17,6 +17,12 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 LLM_CLI = os.getenv("PW_LLM_CLI", "agy")
 LLM_TIMEOUT = int(os.getenv("PW_LLM_TIMEOUT", "120"))       # seconds per call
 OLLAMA_MODEL = os.getenv("PW_OLLAMA_MODEL", "llama3.1")     # used only if LLM_CLI=ollama
+# Ollama sampling controls (only Ollama exposes these; agentic CLIs like agy do
+# not). Pin temperature=0 and a fixed seed for reproducible runs. Set
+# PW_OLLAMA_SEED to empty to leave the seed unset (server picks one per call).
+OLLAMA_TEMPERATURE = float(os.getenv("PW_OLLAMA_TEMPERATURE", "0"))
+_ollama_seed = os.getenv("PW_OLLAMA_SEED", "42").strip()
+OLLAMA_SEED = int(_ollama_seed) if _ollama_seed else None
 # Underlying model behind the CLI, recorded in every report's model note. Most
 # CLIs don't expose their model via --version, so declare it here / via --model
 # (ollama is auto-filled from OLLAMA_MODEL). Empty = "CLI default (unrecorded)".

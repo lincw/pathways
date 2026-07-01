@@ -23,7 +23,14 @@ from typing import Type
 
 from pydantic import BaseModel, ValidationError
 
-from scripts.config import LLM_TIMEOUT, LLM_CLI, LLM_MODEL, OLLAMA_MODEL
+from scripts.config import (
+    LLM_TIMEOUT,
+    LLM_CLI,
+    LLM_MODEL,
+    OLLAMA_MODEL,
+    OLLAMA_SEED,
+    OLLAMA_TEMPERATURE,
+)
 from scripts.progress import spinner as _spinner
 
 _MAX_TRIES = 3
@@ -426,7 +433,18 @@ def _call_ollama_api(prompt: str, model: str, *, fmt, timeout: int) -> str:
     import requests
 
     url = _ollama_host() + "/api/generate"
-    body: dict = {"model": model, "prompt": prompt, "stream": False, "think": False}
+    # Pin sampling for reproducibility: temperature (default 0) and, unless unset,
+    # a fixed seed. Only Ollama exposes these; agentic CLIs (agy) cannot be pinned.
+    options: dict = {"temperature": OLLAMA_TEMPERATURE}
+    if OLLAMA_SEED is not None:
+        options["seed"] = OLLAMA_SEED
+    body: dict = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "think": False,
+        "options": options,
+    }
     if fmt is not None:
         body["format"] = fmt
     last_text = ""
