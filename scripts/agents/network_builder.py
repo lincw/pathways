@@ -1,7 +1,7 @@
 """Network builder — assembles the protein→protein signaling network.
 
 The pipeline's real output edge list should be protein-protein interactions
-(directed causal signaling), NOT gene↔pathway membership. This node fetches
+(directed causal signaling). This node fetches
 directed edges for the pathways that SURVIVED filtering (so it only calls the
 extra endpoints for ~tens of pathways, not the pre-filter hundreds) and keeps
 only edges between proteins that are in the final collected gene set.

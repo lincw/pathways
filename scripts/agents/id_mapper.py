@@ -1,4 +1,4 @@
-"""ID harmonization node — Ch.5 (Tool Use).
+"""ID harmonization node
 
 Maps all gene symbols collected from parallel DB agents to unified IDs
 (Entrez, UniProt, Ensembl) using MyGene.info. Deduplicates raw_pathways

@@ -8,11 +8,11 @@ Built with **LangGraph** using the Agentic Design Patterns:
 
 | Pattern | Where used |
 |---------|-----------|
-| Prompt Chaining (Ch.1) | planner → DB agents → pathway_filter → id_mapper → synthesizer → critic → validator → reporter |
-| Parallelization (Ch.3) | KEGG + Reactome + WikiPathways agents run concurrently via `Send` fan-out |
-| Reflection (Ch.4) | Critic evaluates coverage; loops back to planner if gaps remain |
-| Tool Use (Ch.5) | REST API tools for KEGG, Reactome, WikiPathways; MyGene.info for ID mapping |
-| Multi-agent (Ch.7) | Eight specialized agent nodes, each with a single responsibility |
+| Prompt Chaining | planner → DB agents → pathway_filter → id_mapper → synthesizer → critic → validator → reporter |
+| Parallelization| KEGG + Reactome + WikiPathways agents run concurrently via `Send` fan-out |
+| Reflection | Critic evaluates coverage; loops back to planner if gaps remain |
+| Tool Use | REST API tools for KEGG, Reactome, WikiPathways; MyGene.info for ID mapping |
+| Multi-agent | Eight specialized agent nodes, each with a single responsibility |
 
 **LLM backend:** pluggable CLI — `agy` (default), `claude`, `gemini`, `codex`, or `ollama`.
 Pick one with `--cli <name>` or `PW_LLM_CLI`. Every `report.md` records the **CLI**
@@ -24,7 +24,6 @@ verbatim in the note — you own its accuracy. Where the CLI supports model sele
 ## Prerequisites
 
 - Python 3.11+
-- [antigravity CLI](https://github.com/antigravity-dev/antigravity) (`agy`) installed and on `PATH`
 
 ## Setup
 

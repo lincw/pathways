@@ -1,16 +1,16 @@
 """LangGraph pipeline assembly for the signaling pathway project.
 
 Design patterns from "Agentic Design Patterns":
-  Ch.1  Prompt Chaining     — sequential nodes (planner → id_mapper → synthesizer → critic → reporter)
-  Ch.3  Parallelization     — Send fan-out to kegg/reactome/signor agents simultaneously
-  Ch.4  Reflection          — critic → conditional edge back to planner if coverage gaps remain
-  Ch.5  Tool Use            — each tool module wraps a real API endpoint
-  Ch.6  Planning            — planner_node generates structured search strategy
-  Ch.7  Multi-Agent         — specialised nodes for each database and each processing step
+  Prompt Chaining     — sequential nodes (planner → id_mapper → synthesizer → critic → reporter)
+  Parallelization     — Send fan-out to kegg/reactome/signor agents simultaneously
+  Reflection          — critic → conditional edge back to planner if coverage gaps remain
+  Tool Use            — each tool module wraps a real API endpoint
+  Planning            — planner_node generates structured search strategy
+  Multi-Agent         — specialised nodes for each database and each processing step
 
 Graph topology:
   START → planner
-        → [Send] → kegg_agent ─────┐
+        → [Send] → kegg_agent -─────┐
                  → reactome_agent ──┤→ pathway_filter → id_mapper → synthesizer → critic
                  → signor_agent ────┘
   critic → (if gaps & budget) → planner                        [reflection loop]
@@ -44,7 +44,7 @@ from scripts.state import PipelineState
 
 
 def _dispatch_to_db_agents(state: PipelineState):
-    """Fan-out: run all three DB agents in parallel (Ch.3 Parallelization)."""
+    """Fan-out: run all three DB agents in parallel."""
     return [
         Send("kegg_agent", state),
         Send("reactome_agent", state),

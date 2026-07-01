@@ -1,4 +1,4 @@
-"""Parallel database agent nodes — Ch.3 Parallelization.
+"""Parallel database agent nodes
 
 KEGG uses seed_genes (gene-based pathway lookup).
 Reactome and SIGNOR use search_terms (text/keyword search).

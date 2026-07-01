@@ -1,4 +1,4 @@
-"""Planner agent — Ch.6 Planning.
+"""Planner agent
 
 Generates search terms (for Reactome/WikiPathways text search) AND seed genes
 (for KEGG gene-based pathway lookup). On re-runs uses gap info from critic.
@@ -30,7 +30,7 @@ def planner_node(state: PipelineState) -> dict:
     query = state.get("query", "intracellular signaling pathway")
 
     if iteration == 0:
-        prompt = f"""You are a computational biologist planning a systematic pathway database query.
+        prompt = f"""You are a immunologist planning a systematic pathway database query.
 
 Goal: {query}
 
