@@ -248,35 +248,83 @@ def _strip_terminal_noise(text: str) -> str:
     return _CTRL_RE.sub("", text)
 
 
-def _extract_json(text: str) -> str:
-    """Extract the first complete JSON object from LLM output.
+# Reasoning/"thinking" blocks that reasoning models emit before the real answer.
+# They routinely contain braces and JSON examples, so a naive first-`{` scan
+# grabs reasoning instead of the answer. We drop these blocks first. Covers
+# <think>...</think> (many models) and Ollama's plain-text console block
+# ("Thinking...\n...\n...done thinking."). The Ollama form only strips when the
+# closing marker is present, so a truncated/odd stream is left intact rather
+# than nuked. Model-agnostic: non-reasoning output has no markers -> no-op.
+_THINK_TAG_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+_OLLAMA_THINK_RE = re.compile(
+    r"(?:^|\n)\s*Thinking\.\.\..*?\.\.\.\s*done thinking\.?", re.IGNORECASE | re.DOTALL
+)
 
-    Strips markdown fences, then uses balanced-bracket scanning that ignores
-    bracket characters inside strings — handles nested objects correctly.
-    """
-    text = _strip_terminal_noise((text or "").strip())
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text).strip()
-    start = text.find("{")
-    if start == -1:
+
+def _strip_reasoning(text: str) -> str:
+    """Remove reasoning-model thinking blocks that precede the real answer."""
+    if not text:
         return text
-    depth, in_str, esc = 0, False, False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_str:
-            esc = (not esc) and ch == "\\"
-            if not esc and ch == '"':
-                in_str = False
+    text = _THINK_TAG_RE.sub("", text)
+    text = _OLLAMA_THINK_RE.sub("", text)
+    return text
+
+
+def _clean_output(text: str) -> str:
+    """Scrub terminal noise + reasoning blocks + markdown fences from CLI output."""
+    text = _strip_reasoning(_strip_terminal_noise((text or "").strip()))
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    return re.sub(r"\s*```$", "", text).strip()
+
+
+def _iter_json_objects(text: str):
+    """Yield every balanced top-level ``{...}`` substring, in document order.
+
+    Balanced-bracket scanning that ignores braces inside strings, so nested
+    objects are handled. Reasoning models emit the real answer *after* their
+    thinking, so callers that want the answer should prefer the LAST candidate.
+    """
+    n = len(text)
+    i = 0
+    while i < n:
+        if text[i] != "{":
+            i += 1
             continue
-        if ch == '"':
-            in_str = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return text[start:]
+        depth, in_str, esc = 0, False, False
+        for j in range(i, n):
+            ch = text[j]
+            if in_str:
+                esc = (not esc) and ch == "\\"
+                if not esc and ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    yield text[i : j + 1]
+                    i = j + 1
+                    break
+        else:
+            # Unbalanced tail — yield best-effort remainder and stop.
+            yield text[i:]
+            return
+
+
+def _extract_json(text: str) -> str:
+    """Extract the first complete JSON object from LLM output (best-effort).
+
+    Strips terminal noise, reasoning blocks and markdown fences, then returns
+    the first balanced ``{...}``. Used by callers without a schema to validate
+    against; schema callers use :func:`_iter_json_objects` to try all candidates.
+    """
+    text = _clean_output(text)
+    for candidate in _iter_json_objects(text):
+        return candidate
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -353,19 +401,32 @@ def call_llm_structured(
     for _ in range(max(1, max_tries)):
         raw = call_llm(current_prompt, timeout=timeout, desc=desc)
         last_raw = raw
-        json_text = _extract_json(raw)
-        try:
-            payload = json.loads(json_text, strict=False)
-            return schema.model_validate(payload)
-        except json.JSONDecodeError as exc:
-            last_err = exc
+        # Reasoning models emit the answer AFTER their thinking (which may itself
+        # contain JSON-shaped examples), so try every balanced {...} candidate,
+        # last first, and accept the first that both parses and validates.
+        candidates = list(_iter_json_objects(_clean_output(raw)))
+        json_err: Exception | None = None
+        val_err: ValidationError | None = None
+        for candidate in reversed(candidates):
+            try:
+                payload = json.loads(candidate, strict=False)
+            except json.JSONDecodeError as exc:
+                json_err = exc
+                continue
+            try:
+                return schema.model_validate(payload)
+            except ValidationError as exc:
+                val_err = exc
+        # No candidate validated — re-prompt with the most actionable hint.
+        if val_err is not None:
+            last_err = val_err
+            current_prompt = base_prompt + "\n\n" + _repair_hint(val_err)
+        else:
+            last_err = json_err or last_err
             current_prompt = (
                 base_prompt
                 + "\n\nPrevious output was not valid JSON. Output ONLY a valid JSON object."
             )
-        except ValidationError as exc:
-            last_err = exc
-            current_prompt = base_prompt + "\n\n" + _repair_hint(exc)
 
     raise RuntimeError(
         f"LLM structured output failed after {max_tries} tries: {last_err}; "
