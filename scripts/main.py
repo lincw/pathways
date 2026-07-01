@@ -74,6 +74,7 @@ def main():
         "nodes": [],
         "edges": [],
         "db_coverage": {},
+        "network_stats": {},
         "required_components": [],
         "coverage_assessment": "",
         "coverage_gaps": [],

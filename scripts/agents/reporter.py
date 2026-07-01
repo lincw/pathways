@@ -100,9 +100,11 @@ def reporter_node(state: PipelineState) -> dict:
         df_genes.to_csv(gene_file, sep="\t", index=False)
         output_files.append(str(gene_file))
 
-    # --- 3. Edge list ---
+    # --- 3. Protein→protein signaling network (directed causal edges) ---
     if edges:
+        cols = ["source", "target", "effect", "mechanism", "db", "pathway_id"]
         df_edges = pd.DataFrame(edges)
+        df_edges = df_edges[[c for c in cols if c in df_edges.columns]]
         edge_file = out_dir / "network_edges.tsv"
         df_edges.to_csv(edge_file, sep="\t", index=False)
         output_files.append(str(edge_file))
@@ -180,6 +182,7 @@ flow with → arrows. Fill in only what the evidence supports; note any gaps hon
         "required_components": required,
         "coverage_assessment": assessment,
         "filter_stats": state.get("filter_stats", {}),
+        "network_stats": state.get("network_stats", {}),
         "validation": state.get("validation", {}),
     }, indent=2), encoding="utf-8")
     output_files.append(str(state_file))

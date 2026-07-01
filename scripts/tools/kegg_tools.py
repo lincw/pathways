@@ -12,6 +12,7 @@ Flow:
 
 import re
 import time
+import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Set
 
 import requests
@@ -19,6 +20,17 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from scripts.config import KEGG_BASE
 from scripts.state import PathwayEntry
+
+# KGML relation subtypes → normalised effect / mechanism.
+_KGML_EFFECT = {
+    "activation": "activation", "expression": "activation",
+    "inhibition": "inhibition", "repression": "inhibition",
+}
+_KGML_MECHANISM = {
+    "phosphorylation", "dephosphorylation", "ubiquitination",
+    "methylation", "glycosylation", "binding/association", "dissociation",
+}
+_SYMBOL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9\-]{1,14}$")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
@@ -143,3 +155,73 @@ def fetch_pathways(seed_genes: List[str]) -> List[PathwayEntry]:
 
     print(f"  [KEGG] {len(seed_genes)} seed genes → {len(entries)} pathways")
     return entries
+
+
+# ---------------------------------------------------------------------------
+# KGML relations → directed signaling edges
+# ---------------------------------------------------------------------------
+
+def _kgml_entry_genes(root: ET.Element) -> Dict[str, List[str]]:
+    """Map each KGML entry id to its gene symbol(s); expand group entries."""
+    genes: Dict[str, List[str]] = {}
+    groups: Dict[str, List[str]] = {}
+    for entry in root.findall("entry"):
+        eid = entry.get("id", "")
+        etype = entry.get("type")
+        if etype == "gene":
+            syms: List[str] = []
+            graphics = entry.find("graphics")
+            if graphics is not None and graphics.get("name"):
+                # graphics name is like "TLR4, CD284, TOLL..." — take valid symbols
+                for part in graphics.get("name").split(","):
+                    s = part.strip().rstrip(".").strip()
+                    if _SYMBOL_RE.match(s):
+                        syms.append(s)
+                        break  # first symbol represents the entry
+            genes[eid] = syms
+        elif etype == "group":
+            groups[eid] = [c.get("id", "") for c in entry.findall("component")]
+
+    for gid, comps in groups.items():
+        merged: List[str] = []
+        for c in comps:
+            merged.extend(genes.get(c, []))
+        genes[gid] = merged
+    return genes
+
+
+def kegg_edges_for_pathway(pathway_id: str) -> List[dict]:
+    """Directed signaling edges parsed from a KEGG pathway's KGML."""
+    try:
+        raw = _kegg_get(f"/get/{pathway_id}/kgml")
+        root = ET.fromstring(raw)
+    except Exception as exc:
+        print(f"  [KEGG] KGML failed for {pathway_id}: {exc}", flush=True)
+        return []
+
+    entry_genes = _kgml_entry_genes(root)
+    edges: List[dict] = []
+    for rel in root.findall("relation"):
+        # PPrel = protein-protein, GErel = gene-expression regulation
+        if rel.get("type") not in ("PPrel", "GErel"):
+            continue
+        subs = [s.get("name", "") for s in rel.findall("subtype")]
+        effect = "unknown"
+        mechanism = ""
+        for name in subs:
+            if name in _KGML_EFFECT:
+                effect = _KGML_EFFECT[name]
+            if name in _KGML_MECHANISM:
+                mechanism = name
+        for ga in entry_genes.get(rel.get("entry1", ""), []):
+            for gb in entry_genes.get(rel.get("entry2", ""), []):
+                if ga and gb and ga != gb:
+                    edges.append({
+                        "source": ga,
+                        "target": gb,
+                        "effect": effect,
+                        "mechanism": mechanism,
+                        "db": "KEGG",
+                        "pathway_id": pathway_id,
+                    })
+    return edges

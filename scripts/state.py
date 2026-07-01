@@ -40,8 +40,9 @@ class PipelineState(TypedDict):
 
     # --- Synthesis ---
     nodes: List[Dict]
-    edges: List[Dict]
+    edges: List[Dict]            # protein→protein signaling edges (set by network_builder)
     db_coverage: Dict[str, int]
+    network_stats: Dict
 
     # --- Critic ---
     required_components: List[str]  # LLM-generated once from query, reused

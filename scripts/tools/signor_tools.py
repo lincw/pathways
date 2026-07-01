@@ -77,6 +77,53 @@ def _pathway_relations(pathway_id: str) -> List[List[str]]:
     return _fetch_tsv(f"/getPathwayData.php?pathway={pathway_id}&relations=only")
 
 
+def _norm_effect(raw: str) -> str:
+    """Normalise a SIGNOR effect string to activation/inhibition/unknown."""
+    r = raw.lower()
+    if "up-regulate" in r:
+        return "activation"
+    if "down-regulate" in r:
+        return "inhibition"
+    return "unknown"
+
+
+def _edges_from_rows(rows: List[List[str]], pathway_id: str) -> List[dict]:
+    """Extract directed protein→protein causal edges from SIGNOR relation rows."""
+    edges: List[dict] = []
+    for row in rows:
+        if len(row) < 17:
+            continue
+        tax = row[16].strip()
+        if tax and tax != "9606":
+            continue
+        a, ta = row[2].strip(), row[4].strip().lower()
+        b, tb = row[7].strip(), row[9].strip().lower()
+        # protein↔protein only (complexes/chemicals aren't gene symbols)
+        if ta not in _PROTEIN_TYPES or tb not in _PROTEIN_TYPES:
+            continue
+        if not (_GENE_RE.match(a) and _GENE_RE.match(b)) or a == b:
+            continue
+        raw_effect = row[12].strip()
+        edges.append({
+            "source": a,
+            "target": b,
+            "effect": _norm_effect(raw_effect),
+            "mechanism": row[13].strip(),
+            "db": "SIGNOR",
+            "pathway_id": pathway_id,
+        })
+    return edges
+
+
+def signor_edges_for_pathway(pathway_id: str) -> List[dict]:
+    """Directed causal edges for one SIGNOR pathway (used by the network builder)."""
+    try:
+        return _edges_from_rows(_pathway_relations(pathway_id), pathway_id)
+    except Exception as exc:
+        print(f"  [SIGNOR] edges failed for {pathway_id}: {exc}", flush=True)
+        return []
+
+
 def _genes_from_rows(rows: List[List[str]]) -> List[str]:
     """Extract unique human protein gene symbols from SIGNOR relation rows."""
     genes: Set[str] = set()

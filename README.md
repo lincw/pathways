@@ -50,14 +50,14 @@ python -m scripts.main --visualise
 
 ## Output
 
-Each run creates a timestamped directory under `outputs/`:
+Each run creates a `results/<query-slug>_<timestamp>/` directory:
 
 | File | Contents |
 |------|----------|
-| `report.md` | Systematic biological narrative (not a database comparison) |
+| `report.md` | Systematic biological narrative (+ AI-model note and QC block) |
 | `pathways.tsv` | All pathways found (source, ID, name, gene count, gene list) |
 | `genes.tsv` | Unique genes with Entrez / UniProt / Ensembl IDs |
-| `network_edges.tsv` | Bipartite gene ↔ pathway edges with provenance |
+| `network_edges.tsv` | Directed protein→protein signaling edges (`source, target, effect, mechanism, db`) from SIGNOR causal relations + KEGG KGML |
 | `pipeline_state.json` | Full pipeline metadata snapshot |
 
 ## Progress display

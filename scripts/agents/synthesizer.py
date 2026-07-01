@@ -43,10 +43,10 @@ def synthesizer_node(state: PipelineState) -> dict:
 
     nodes = [{"id": n, **{k: str(v) for k, v in data.items()}}
              for n, data in G.nodes(data=True)]
-    edges = [{"source": u, "target": v, "db": d.get("db", "")}
-             for u, v, d in G.edges(data=True)]
 
     gene_count = sum(1 for n in nodes if n.get("type") == "gene")
-    print(f"  [Synthesizer] {len(pathways)} pathways, {gene_count} genes, {len(edges)} edges")
+    print(f"  [Synthesizer] {len(pathways)} pathways, {gene_count} genes")
 
-    return {"nodes": nodes, "edges": edges, "db_coverage": db_coverage}
+    # The signaling network edges (protein→protein) are built later by the
+    # network_builder node; the synthesizer only assembles the gene/pathway nodes.
+    return {"nodes": nodes, "db_coverage": db_coverage}
