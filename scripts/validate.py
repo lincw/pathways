@@ -56,6 +56,9 @@ import os as _os
 MIN_TARGET_TERM_SIZE = int(_os.getenv("LPS_VALIDATE_MIN_TERM_SIZE", "5"))
 MAX_TARGET_TERM_SIZE = int(_os.getenv("LPS_VALIDATE_MAX_TERM_SIZE", "1000"))
 SHORTLIST_SIZE = int(_os.getenv("LPS_VALIDATE_SHORTLIST", "70"))
+# Fallback recall reference must be at least this big, so a tiny leaf term doesn't
+# make the denominator noisy when the LLM doesn't designate a primary.
+RECALL_REF_MIN_SIZE = int(_os.getenv("LPS_VALIDATE_RECALL_MIN_SIZE", "20"))
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +140,20 @@ class TargetTerms(BaseModel):
     target_natives: List[str] = Field(
         description="native IDs (e.g. 'GO:0002224') of terms that ARE the queried "
         "pathway or its direct up/downstream signaling modules. Exclude off-topic "
-        "terms that merely share hub genes."
+        "terms that merely share hub genes. Used to measure COVERAGE."
+    )
+    primary_native: str = Field(
+        default="",
+        description="native ID of the SINGLE term that most specifically names the "
+        "queried pathway itself — a focused, representative pathway term. NOT a broad "
+        "parent (e.g. 'response to cytokine', 'signal transduction') and NOT a "
+        "hyper-narrow leaf. Used as the RECALL reference. Must be one of target_natives.",
     )
 
 
-def select_target_terms(query: str, terms: List[Dict], top: int = SHORTLIST_SIZE) -> List[str]:
+def select_target_terms(query: str, terms: List[Dict], top: int = SHORTLIST_SIZE):
+    """Return (target_natives, primary_native) chosen by the LLM from a size-windowed
+    shortlist. primary_native anchors recall to the tightest query-specific term."""
     # Keep only terms inside the informative size window [MIN, MAX] so the
     # specific queried pathway can surface in a bloated gene set; then take the
     # most significant remaining terms.
@@ -151,7 +163,7 @@ def select_target_terms(query: str, terms: List[Dict], top: int = SHORTLIST_SIZE
     ]
     shortlist = specific[:top]
     if not shortlist:
-        return []
+        return [], None
     listing = "\n".join(
         f"{t['native']} [{t['source']}] {t['name']} "
         f"(term_size={t['term_size']}, hits={t['intersection_size']})"
@@ -162,24 +174,50 @@ def select_target_terms(query: str, terms: List[Dict], top: int = SHORTLIST_SIZE
 Query pathway: "{query}"
 
 Below are enriched terms returned by an independent enrichment tool for the gene
-set under test. Select the terms that genuinely REPRESENT the queried pathway —
-the canonical cascade plus modules directly upstream/downstream. Exclude terms
-about other processes/diseases that merely share hub proteins.
+set under test.
+
+1. target_natives: select all terms that genuinely REPRESENT the queried pathway —
+   the canonical cascade plus modules directly upstream/downstream. Exclude terms
+   about other processes/diseases that merely share hub proteins.
+2. primary_native: from your selection, name the ONE term that most specifically
+   IS the queried pathway (a focused, representative pathway term — not a broad
+   parent, not a hyper-narrow sub-branch). This is the recall reference.
 
 Terms:
 {listing}
 """
+    valid = {t["native"] for t in shortlist}
     try:
         res = call_agy_structured(prompt, TargetTerms, desc="Validator: matching target terms...")
         picked = {n.strip() for n in res.target_natives}
-        return [t["native"] for t in shortlist if t["native"] in picked]
+        targets = [t["native"] for t in shortlist if t["native"] in picked]
+        primary = res.primary_native.strip() if res.primary_native else ""
+        if primary not in valid:
+            primary = None
+        return targets, primary
     except Exception as exc:
         print(f"  [validate] LLM term selection failed ({exc}); "
               "falling back to best-p GO:BP term.")
         for t in shortlist:
             if t["source"] == "GO:BP":
-                return [t["native"]]
-        return [shortlist[0]["native"]]
+                return [t["native"]], t["native"]
+        return [shortlist[0]["native"]], shortlist[0]["native"]
+
+
+def _pick_recall_reference(target_terms: List[Dict], primary_native) -> Dict | None:
+    """Choose the term recall is measured against: the LLM-designated specific term
+    if valid, else the tightest target term above a size floor (avoids a tiny, noisy
+    denominator), else the broadest target term."""
+    if primary_native:
+        match = next((t for t in target_terms if t["native"] == primary_native), None)
+        if match:
+            return match
+    if not target_terms:
+        return None
+    floored = [t for t in target_terms if (t["term_size"] or 0) >= RECALL_REF_MIN_SIZE]
+    if floored:
+        return min(floored, key=lambda t: t["term_size"] or 0)
+    return max(target_terms, key=lambda t: t["term_size"] or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -193,17 +231,18 @@ def score(query: str, genes: List[str]) -> Dict:
     # Score only against held-out reference sources (avoid grading with a source
     # the pipeline copied from).
     ref_terms = [t for t in terms if t["source"] in REFERENCE_SOURCES]
-    targets = set(select_target_terms(query, ref_terms))
-    target_terms = [t for t in ref_terms if t["native"] in targets]
+    targets, primary_native = select_target_terms(query, ref_terms)
+    targetset = set(targets)
+    target_terms = [t for t in ref_terms if t["native"] in targetset]
 
     # Coverage: fraction of OUTPUT genes explained by the queried pathway.
     covered = set().union(*[t["members"] for t in target_terms]) if target_terms else set()
     coverage = len(covered) / n if n else 0.0
 
-    # Recall: fraction of the reference recovered. Anchor to the single broadest
-    # target term to avoid double-counting overlapping GO terms (we only know each
-    # term's size, not the identities to deduplicate a union of full term sets).
-    primary = max(target_terms, key=lambda t: (t["term_size"] or 0), default=None)
+    # Recall: fraction of the reference recovered. Anchor to the tightest
+    # query-specific term (LLM-designated) rather than the broadest match, so the
+    # denominator is the actual pathway asked for — not a sprawling parent term.
+    primary = _pick_recall_reference(target_terms, primary_native)
     recall = (primary["intersection_size"] / primary["term_size"]
               if primary and primary["term_size"] else 0.0)
 
