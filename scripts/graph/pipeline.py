@@ -11,10 +11,15 @@ Design patterns from "Agentic Design Patterns":
 Graph topology:
   START → planner
         → [Send] → kegg_agent ─────┐
-                 → reactome_agent ──┤→ id_mapper → synthesizer → critic
+                 → reactome_agent ──┤→ pathway_filter → id_mapper → synthesizer → critic
                  → signor_agent ────┘
-  critic → (if gaps & budget) → planner   [reflection loop]
-         → (else)             → reporter → END
+  critic → (if gaps & budget) → planner        [reflection loop]
+         → (else)             → validator → reporter → END
+
+  pathway_filter (enrichment ORA + LLM relevance gate) removes hub-gene
+  over-inclusion before ID mapping so downstream nodes see a focused set.
+  validator (monitor) scores the final gene set with an independent tool
+  (g:Profiler vs held-out GO:BP) — read-only QC, never alters collection.
 """
 
 from langgraph.constants import Send
@@ -27,9 +32,11 @@ from scripts.agents.db_agents import (
     signor_agent_node,
 )
 from scripts.agents.id_mapper import id_mapper_node
+from scripts.agents.pathway_filter import pathway_filter_node
 from scripts.agents.planner import planner_node
 from scripts.agents.reporter import reporter_node
 from scripts.agents.synthesizer import synthesizer_node
+from scripts.agents.validator import validator_node
 from scripts.state import PipelineState
 
 
@@ -50,9 +57,11 @@ def build_pipeline() -> "CompiledGraph":
     builder.add_node("kegg_agent", kegg_agent_node)
     builder.add_node("reactome_agent", reactome_agent_node)
     builder.add_node("signor_agent", signor_agent_node)
+    builder.add_node("pathway_filter", pathway_filter_node)
     builder.add_node("id_mapper", id_mapper_node)
     builder.add_node("synthesizer", synthesizer_node)
     builder.add_node("critic", critic_node)
+    builder.add_node("validator", validator_node)
     builder.add_node("reporter", reporter_node)
 
     # --- Define edges ---
@@ -63,13 +72,15 @@ def build_pipeline() -> "CompiledGraph":
     # Fan-out from planner → 3 parallel DB agents (Ch.3)
     builder.add_conditional_edges("planner", _dispatch_to_db_agents)
 
-    # Fan-in: all three parallel agents converge at id_mapper
-    # LangGraph waits for ALL incoming branches before running the join node
-    builder.add_edge("kegg_agent", "id_mapper")
-    builder.add_edge("reactome_agent", "id_mapper")
-    builder.add_edge("signor_agent", "id_mapper")
+    # Fan-in: all three parallel agents converge at the relevance filter.
+    # LangGraph waits for ALL incoming branches before running the join node.
+    builder.add_edge("kegg_agent", "pathway_filter")
+    builder.add_edge("reactome_agent", "pathway_filter")
+    builder.add_edge("signor_agent", "pathway_filter")
 
     # Sequential processing chain (Ch.1 Prompt Chaining)
+    # Filter (enrichment + LLM gate) → ID mapping → synthesis
+    builder.add_edge("pathway_filter", "id_mapper")
     builder.add_edge("id_mapper", "synthesizer")
     builder.add_edge("synthesizer", "critic")
 
@@ -78,11 +89,13 @@ def build_pipeline() -> "CompiledGraph":
         "critic",
         route_after_critic,
         {
-            "planner": "planner",   # re-query with gap-filling search terms
-            "reporter": "reporter", # sufficient coverage → final report
+            "planner": "planner",     # re-query with gap-filling search terms
+            "validator": "validator", # sufficient coverage → independent QC → report
         },
     )
 
+    # Independent QC (monitor only) then final report
+    builder.add_edge("validator", "reporter")
     builder.add_edge("reporter", END)
 
     return builder.compile()

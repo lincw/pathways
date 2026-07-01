@@ -8,7 +8,7 @@ Built with **LangGraph** using the Agentic Design Patterns:
 
 | Pattern | Where used |
 |---------|-----------|
-| Prompt Chaining (Ch.1) | planner → DB agents → id_mapper → synthesizer → critic → reporter |
+| Prompt Chaining (Ch.1) | planner → DB agents → pathway_filter → id_mapper → synthesizer → critic → validator → reporter |
 | Parallelization (Ch.3) | KEGG + Reactome + WikiPathways agents run concurrently via `Send` fan-out |
 | Reflection (Ch.4) | Critic evaluates coverage; loops back to planner if gaps remain |
 | Tool Use (Ch.5) | REST API tools for KEGG, Reactome, WikiPathways; MyGene.info for ID mapping |
@@ -75,9 +75,47 @@ The pipeline prints per-step progress while running:
 | **Reactome** | Deep human signaling, curated hierarchy | ContentService REST: text search → `/data/participants/{id}` |
 | **SIGNOR** | Causal signaling edges (who activates/inhibits whom + mechanism) | REST: keyword filter on pathway list → `/api/pathway/{id}/relations/` |
 
+## Relevance filter
+
+Gene-based lookup pulls in every pathway that shares a promiscuous hub gene
+(NFKB1, MAPK1, AKT1 …), which otherwise drags "Pathways in cancer",
+"Alzheimer disease", "Thermogenesis", etc. into an LPS query. The
+**pathway_filter** node removes this over-inclusion in two data-driven stages,
+with **no hardcoded pathway names or ID patterns**:
+
+1. **Statistical enrichment (hypergeometric ORA):** a pathway is kept only if its
+   overlap with the seed-gene set is over-represented (BH-adjusted *p* < `ENRICHMENT_FDR`).
+   A pathway sharing one incidental hub gene is not enriched and is dropped.
+2. **LLM relevance gate:** the query drives a per-pathway judgement — "is this part
+   of, or directly up/downstream of, the queried pathway?" — removing hub-rich but
+   off-topic maps (cancer, neurodegeneration, unrelated infections) that survive
+   the statistical test.
+
+Both stages are pure functions of the seed set and the user query. Tune or disable
+them via `ENRICHMENT_*` and `LLM_*` settings in `config.py` (or the matching
+`LPS_*` environment variables).
+
+## Independent validation (built-in QC)
+
+Every run ends with a **monitor-mode** quality check (`validator` node). The final
+gene set is scored by an external tool (**g:Profiler**) against a **held-out**
+reference (**GO:BP**) that the pipeline never queries, so the check stays honest —
+the pipeline is *not* tuned to pass its own grader. It reports two numbers:
+
+- **Coverage (precision):** fraction of output genes that fall inside the queried
+  pathway's terms — the over-inclusion guard. Low = bloated.
+- **Recall:** fraction of the reference term recovered — completeness. Low = gaps.
+
+A `PASS`/`FAIL` verdict plus the matched terms are written into `report.md` and
+`pipeline_state.json`. To score any existing run manually:
+
+```bash
+python -m scripts.validate --results-dir results/<timestamp> --query "<the query>"
+```
+
 ## Reflection loop
 
-After the three DB agents run in parallel, the **Critic** agent checks coverage against a query-specific checklist it generates from scratch for each query (no hardcoded biology). If gaps remain and the iteration budget allows (`MAX_REFLECTION_ITERATIONS` in `config.py`), the **Planner** reruns with gap-targeted terms and genes.
+After the three DB agents run in parallel and the relevance filter prunes the set, the **Critic** agent checks coverage against a query-specific checklist it generates from scratch for each query (no hardcoded biology). If gaps remain and the iteration budget allows (`MAX_REFLECTION_ITERATIONS` in `config.py`), the **Planner** reruns with gap-targeted terms and genes.
 
 ## Configuration
 

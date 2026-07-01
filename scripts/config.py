@@ -15,6 +15,22 @@ AGY_TIMEOUT = int(os.getenv("AGY_TIMEOUT", "120"))  # seconds per call
 
 MAX_REFLECTION_ITERATIONS = int(os.getenv("LPS_MAX_REFLECTIONS", "2"))
 
+# --- Pathway relevance filtering -------------------------------------------
+# Two data-driven stages remove hub-gene over-inclusion WITHOUT any hardcoded
+# pathway names or ID patterns:
+#   1. Hypergeometric over-representation (ORA) of the seed-gene set.
+#   2. LLM relevance gate driven by the user query.
+ENRICHMENT_ENABLED = os.getenv("LPS_ENRICHMENT", "1") != "0"
+# Background gene universe for the hypergeometric test (protein-coding genome).
+ENRICHMENT_BACKGROUND_SIZE = int(os.getenv("LPS_ENRICHMENT_BACKGROUND", "20000"))
+# BH-adjusted p-value cutoff; a pathway must be enriched for the seed set to pass.
+ENRICHMENT_FDR = float(os.getenv("LPS_ENRICHMENT_FDR", "0.05"))
+# Minimum raw overlap with the seed set (guards tiny-pathway false positives).
+ENRICHMENT_MIN_OVERLAP = int(os.getenv("LPS_ENRICHMENT_MIN_OVERLAP", "2"))
+# LLM relevance gate on the survivors of stage 1.
+LLM_RELEVANCE_GATE = os.getenv("LPS_LLM_GATE", "1") != "0"
+LLM_GATE_CHUNK = int(os.getenv("LPS_LLM_GATE_CHUNK", "40"))
+
 # Databases queried (extend here to add more)
 ENABLED_DATABASES = ["KEGG", "Reactome", "SIGNOR"]
 

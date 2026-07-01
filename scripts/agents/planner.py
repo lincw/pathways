@@ -67,6 +67,9 @@ Generate NEW (non-overlapping) terms and genes targeting these gaps:
     return {
         "search_terms": result.search_terms,
         "seed_genes": result.seed_genes,
+        # Accumulate seeds across iterations (operator.add reducer) so the
+        # enrichment filter tests pathways against the full LPS query set.
+        "seed_gene_pool": list(result.seed_genes),
         "plan": result.plan,
         "iteration": iteration + 1,
     }

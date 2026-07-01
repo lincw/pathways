@@ -51,7 +51,10 @@ def main():
         "seed_genes": [],     # planner fills these from the query
         "plan": "",
         "iteration": 0,
+        "seed_gene_pool": [],
         "raw_pathways": [],
+        "filtered_pathways": None,
+        "filter_stats": {},
         "id_mapping": {},
         "nodes": [],
         "edges": [],
@@ -61,6 +64,7 @@ def main():
         "coverage_gaps": [],
         "additional_search_terms": [],
         "additional_seed_genes": [],
+        "validation": {},
         "report": "",
         "output_files": [],
     }
@@ -80,6 +84,15 @@ def main():
 
     print("\n--- Coverage Assessment ---")
     print(final_state.get("coverage_assessment", "(none)"))
+
+    val = final_state.get("validation", {})
+    if val.get("status") == "ok":
+        print("\n--- Independent QC (g:Profiler vs held-out GO:BP) ---")
+        print(f"Coverage: {val['coverage']:.1%} | Recall: {val['recall']:.1%} "
+              f"| Verdict: {val.get('verdict')}")
+    elif val.get("status") in ("error", "skipped"):
+        print(f"\n--- Independent QC: {val.get('status')} "
+              f"({val.get('error') or val.get('reason')}) ---")
 
 
 if __name__ == "__main__":

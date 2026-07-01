@@ -5,23 +5,16 @@ Maps all gene symbols collected from parallel DB agents to unified IDs
 on (source, pathway_id) to handle accumulated duplicates across reflection iterations.
 """
 
-from scripts.state import PipelineState
+from scripts.state import PipelineState, working_pathways
 from scripts.tools.id_mapping_tools import collect_all_genes, map_gene_symbols
 
 
 def id_mapper_node(state: PipelineState) -> dict:
-    raw = state.get("raw_pathways", [])
+    # Use the relevance-filtered pathway set (already deduplicated) so we only
+    # map genes that survive enrichment + the LLM gate.
+    unique_pathways = working_pathways(state)
 
-    # Deduplicate pathways that may have been collected in multiple iterations
-    seen = set()
-    unique_pathways = []
-    for pw in raw:
-        key = (pw["source"], pw["pathway_id"])
-        if key not in seen:
-            seen.add(key)
-            unique_pathways.append(pw)
-
-    print(f"  [ID Mapper] {len(raw)} raw → {len(unique_pathways)} unique pathways")
+    print(f"  [ID Mapper] mapping genes for {len(unique_pathways)} filtered pathways")
 
     all_genes = collect_all_genes(unique_pathways)
     print(f"  [ID Mapper] mapping {len(all_genes)} unique gene symbols...")
@@ -38,10 +31,4 @@ def id_mapper_node(state: PipelineState) -> dict:
 
     print(f"  [ID Mapper] successfully mapped {len(mapping)} genes")
 
-    # Write back deduplicated pathways by overriding raw_pathways.
-    # Since raw_pathways uses operator.add, we cannot "reset" it here —
-    # instead we store the deduplicated view separately; synthesizer uses id_mapping.
-    return {
-        "id_mapping": mapping,
-        # raw_pathways stays as-is; synthesizer will re-deduplicate
-    }
+    return {"id_mapping": mapping}

@@ -110,4 +110,4 @@ def route_after_critic(state: PipelineState) -> str:
     if gaps and iteration <= MAX_REFLECTION_ITERATIONS:
         print(f"  [Router] reflection {iteration} — filling {len(gaps)} gap(s)")
         return "planner"
-    return "reporter"
+    return "validator"

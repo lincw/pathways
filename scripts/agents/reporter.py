@@ -12,11 +12,41 @@ import pandas as pd
 
 from scripts.config import OUTPUT_DIR
 from scripts.llm import call_agy
-from scripts.state import PipelineState
+from scripts.state import PipelineState, working_pathways
+
+
+def _format_validation_md(val: dict) -> str:
+    """Render the independent-QC block for report.md."""
+    if not val or val.get("status") in ("skipped", "error") or "coverage" not in val:
+        reason = (val or {}).get("error") or (val or {}).get("reason") or "not run"
+        return f"\n\n## Independent Validation (QC)\n\n_Validation unavailable: {reason}._\n"
+
+    lines = [
+        "\n\n## Independent Validation (QC)",
+        "",
+        "Read-only check: the final gene set scored with an external tool "
+        "(g:Profiler) against a held-out reference (GO:BP) the pipeline does not query.",
+        "",
+        f"- **Verdict:** {val.get('verdict', 'n/a')}",
+        f"- **Coverage (precision):** {val['coverage']:.1%} "
+        f"— fraction of output genes inside the queried pathway (over-inclusion guard)",
+        f"- **Recall:** {val['recall']:.1%} "
+        f"— fraction of the reference term recovered (completeness)",
+        f"- **Genes covered:** {val.get('genes_covered')} / {val.get('n_output_genes')}",
+    ]
+    pr = val.get("primary_reference")
+    if pr:
+        lines.append(f"- **Primary reference term:** {pr['native']} {pr['name']} "
+                     f"({pr['hits']}/{pr['term_size']})")
+    targets = val.get("target_terms", [])
+    if targets:
+        lines.append("- **Matched pathway terms:**")
+        for t in targets[:12]:
+            lines.append(f"    - {t['native']} {t['name']} (hits {t['hits']}/{t['term_size']})")
+    return "\n".join(lines) + "\n"
 
 
 def reporter_node(state: PipelineState) -> dict:
-    raw = state.get("raw_pathways", [])
     db_coverage = state.get("db_coverage", {})
     nodes = state.get("nodes", [])
     edges = state.get("edges", [])
@@ -25,14 +55,8 @@ def reporter_node(state: PipelineState) -> dict:
     query = state.get("query", "")
     required = state.get("required_components", [])
 
-    # Deduplicate pathways
-    seen = set()
-    pathways = []
-    for pw in raw:
-        key = (pw["source"], pw["pathway_id"])
-        if key not in seen:
-            seen.add(key)
-            pathways.append(pw)
+    # Relevance-filtered, deduplicated pathway set (same as synthesizer).
+    pathways = working_pathways(state)
 
     all_genes = sorted({n["id"] for n in nodes if n.get("type") == "gene"})
     all_pathway_names = [pw["pathway_name"] for pw in pathways]
@@ -116,6 +140,9 @@ Fill in only what the evidence supports; note any gaps honestly.
 """
     report_text = call_agy(prompt, desc="Reporter: synthesizing pathway narrative...")
 
+    # Append the independent QC block (monitor mode).
+    report_text = report_text + _format_validation_md(state.get("validation", {}))
+
     report_file = out_dir / "report.md"
     report_file.write_text(report_text, encoding="utf-8")
     output_files.append(str(report_file))
@@ -130,6 +157,8 @@ Fill in only what the evidence supports; note any gaps honestly.
         "pathway_count": len(pathways),
         "required_components": required,
         "coverage_assessment": assessment,
+        "filter_stats": state.get("filter_stats", {}),
+        "validation": state.get("validation", {}),
     }, indent=2), encoding="utf-8")
     output_files.append(str(state_file))
 

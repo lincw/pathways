@@ -8,23 +8,16 @@ from collections import Counter
 
 import networkx as nx
 
-from scripts.state import PipelineState
+from scripts.state import PipelineState, working_pathways
 
 
 def synthesizer_node(state: PipelineState) -> dict:
-    raw = state.get("raw_pathways", [])
     id_mapping = state.get("id_mapping", {})
 
-    # Deduplicate on (source, pathway_id)
-    seen = set()
-    pathways = []
-    for pw in raw:
-        key = (pw["source"], pw["pathway_id"])
-        if key not in seen:
-            seen.add(key)
-            pathways.append(pw)
+    # Relevance-filtered, deduplicated pathway set.
+    pathways = working_pathways(state)
 
-    print(f"  [Synthesizer] building graph from {len(pathways)} unique pathways...")
+    print(f"  [Synthesizer] building graph from {len(pathways)} filtered pathways...")
 
     G = nx.Graph()
 
