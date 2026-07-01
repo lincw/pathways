@@ -8,3 +8,7 @@ python-dotenv
 pydantic
 tenacity
 rich
+# Optional: last-ditch repair of malformed JSON from small local models.
+# Primary defense is grammar-constrained decoding (Ollama --format json); this
+# is a soft fallback for backends without it and is imported defensively.
+json-repair

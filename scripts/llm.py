@@ -57,6 +57,10 @@ LLM_CLI_SPECS = {
     "ollama": {  # model is always explicit in `ollama run <model>`
         "argv": lambda exe, p: [exe, "run", OLLAMA_MODEL, p],
         "model_argv": lambda exe, p, m: [exe, "run", m, p],
+        # Grammar-constrained JSON decoding: guarantees parseable output, which
+        # small local models otherwise mangle (unescaped quotes, missing commas).
+        # Inserted before the positional prompt only for JSON-mode calls.
+        "json_flags": ["--format", "json"],
     },
 }
 
@@ -314,6 +318,33 @@ def _iter_json_objects(text: str):
             return
 
 
+# Optional last-ditch repair for malformed JSON (unescaped quotes, missing
+# commas, trailing commas) from small local models. Soft dependency: if
+# json-repair isn't installed, we simply skip repair and fall through to the
+# normal retry loop. Primary defense is grammar-constrained decoding (Ollama
+# --format json); this only helps backends that lack that.
+try:  # pragma: no cover - import guard
+    from json_repair import repair_json as _repair_json
+except Exception:  # pragma: no cover
+    _repair_json = None
+
+
+def _loads_lenient(candidate: str) -> object:
+    """json.loads(strict=False), falling back to json-repair when available.
+
+    Raises json.JSONDecodeError if the text can't be parsed even after repair.
+    """
+    try:
+        return json.loads(candidate, strict=False)
+    except json.JSONDecodeError:
+        if _repair_json is None:
+            raise
+        repaired = _repair_json(candidate)  # returns "" if unrepairable
+        if not repaired:
+            raise
+        return json.loads(repaired, strict=False)
+
+
 def _extract_json(text: str) -> str:
     """Extract the first complete JSON object from LLM output (best-effort).
 
@@ -354,11 +385,18 @@ def _repair_hint(exc: ValidationError) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
-def call_llm(prompt: str, timeout: int = LLM_TIMEOUT, desc: str | None = None) -> str:
+def call_llm(
+    prompt: str,
+    timeout: int = LLM_TIMEOUT,
+    desc: str | None = None,
+    json_mode: bool = False,
+) -> str:
     """Call the active LLM CLI with a prompt and return its text response.
 
     Backend is selected by --cli / PW_LLM_CLI (default: agy). Pass ``desc`` to
-    show an animated spinner while the CLI runs.
+    show an animated spinner while the CLI runs. ``json_mode=True`` requests
+    grammar-constrained JSON output where the backend supports it (e.g. Ollama's
+    ``--format json``), guaranteeing parseable output from small local models.
     """
     name, exe, spec = _resolve_cli()
     if not exe:
@@ -374,6 +412,10 @@ def call_llm(prompt: str, timeout: int = LLM_TIMEOUT, desc: str | None = None) -
         argv = spec["model_argv"](exe, safe_prompt, model)
     else:
         argv = spec["argv"](exe, safe_prompt)
+    # Insert JSON-mode flags before the trailing positional prompt (the prompt is
+    # always the last argv element across all backends).
+    if json_mode and spec.get("json_flags"):
+        argv = argv[:-1] + list(spec["json_flags"]) + argv[-1:]
     with _spinner(desc):
         proc = _run_process(argv, env=os.environ.copy(), timeout=timeout)
     if proc.returncode != 0:
@@ -399,7 +441,7 @@ def call_llm_structured(
     last_raw = ""
 
     for _ in range(max(1, max_tries)):
-        raw = call_llm(current_prompt, timeout=timeout, desc=desc)
+        raw = call_llm(current_prompt, timeout=timeout, desc=desc, json_mode=True)
         last_raw = raw
         # Reasoning models emit the answer AFTER their thinking (which may itself
         # contain JSON-shaped examples), so try every balanced {...} candidate,
@@ -409,7 +451,7 @@ def call_llm_structured(
         val_err: ValidationError | None = None
         for candidate in reversed(candidates):
             try:
-                payload = json.loads(candidate, strict=False)
+                payload = _loads_lenient(candidate)
             except json.JSONDecodeError as exc:
                 json_err = exc
                 continue
@@ -444,6 +486,6 @@ def call_llm_json(prompt: str, timeout: int = LLM_TIMEOUT) -> dict | list:
         prompt.rstrip()
         + "\n\nRespond with ONLY valid JSON — no markdown fences, no explanation text."
     )
-    raw = call_llm(json_prompt, timeout=timeout)
+    raw = call_llm(json_prompt, timeout=timeout, json_mode=True)
     json_text = _extract_json(raw)
-    return json.loads(json_text, strict=False)
+    return _loads_lenient(json_text)
