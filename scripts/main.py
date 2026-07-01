@@ -26,6 +26,7 @@ def build_initial_state(query: str) -> PipelineState:
         "filtered_pathways": None,
         "filter_stats": {},
         "id_mapping": {},
+        "unmapped_gene_symbols": [],
         "nodes": [],
         "edges": [],
         "robust_edges": [],

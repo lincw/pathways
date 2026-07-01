@@ -37,6 +37,11 @@ class PipelineState(TypedDict):
 
     # --- ID mapping ---
     id_mapping: Dict[str, Dict]  # symbol -> {entrez, uniprot, ensembl}
+    # Symbols that failed to resolve to any real gene ID (not a gene: reaction
+    # cofactor, complex name, viral protein...) — excluded from the network by
+    # the synthesizer. Only populated for symbols MyGene.info actually responded
+    # for (see id_mapper_node), so an API outage can't be mistaken for this.
+    unmapped_gene_symbols: List[str]
 
     # --- Synthesis ---
     nodes: List[Dict]
