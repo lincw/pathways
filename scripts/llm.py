@@ -1,12 +1,13 @@
-"""Agy CLI wrapper for all LLM reasoning calls in the LPS pipeline.
+"""Pluggable LLM CLI wrapper for all reasoning calls in the pipeline.
 
-Ported from eu_jobsmith/app/llm_cli.py — same robust patterns:
+Backend is selected at runtime (agy / claude / gemini / codex / ollama) via
+--cli or PW_LLM_CLI; see LLM_CLI_SPECS below. Robust patterns:
   - _find_cli: searches PATH + common per-user install roots (npm, homebrew, .local)
   - _run_process: Popen + poll loop (supports cancellation; no zombie processes)
   - _extract_json: balanced-bracket scanner, tolerates markdown fences and LLM preamble
-  - call_agy_structured: Pydantic schema instruction + retry with field-level repair hints
+  - call_llm_structured: Pydantic schema instruction + retry with field-level repair hints
 
-No API key required — uses the local agy CLI subscription.
+The default backend (agy) needs no API key — it uses the local CLI subscription.
 """
 
 from __future__ import annotations
@@ -22,10 +23,66 @@ from typing import Type
 
 from pydantic import BaseModel, ValidationError
 
-from scripts.config import AGY_TIMEOUT
+from scripts.config import LLM_TIMEOUT, LLM_CLI, OLLAMA_MODEL
 from scripts.progress import spinner as _spinner
 
 _MAX_TRIES = 3
+
+
+# ---------------------------------------------------------------------------
+# LLM CLI backends — how to invoke each supported CLI non-interactively.
+# Each builder maps (executable_path, prompt) -> argv list returning plain text
+# (or JSON) on stdout. Default backend is agy; switch with --cli / PW_LLM_CLI.
+# ---------------------------------------------------------------------------
+
+LLM_CLI_SPECS = {
+    "agy":    lambda exe, p: [exe, "-p", p],
+    "claude": lambda exe, p: [exe, "-p", p],                       # Claude Code print mode
+    "gemini": lambda exe, p: [exe, "-p", p],
+    "codex":  lambda exe, p: [exe, "exec", "--skip-git-repo-check", p],
+    "ollama": lambda exe, p: [exe, "run", OLLAMA_MODEL, p],
+}
+
+_ACTIVE_CLI_OVERRIDE: str | None = None
+_CLI_INFO_CACHE: dict | None = None
+
+
+def set_llm_cli(name: str | None) -> None:
+    """Override the configured LLM CLI at runtime (e.g. from --cli)."""
+    global _ACTIVE_CLI_OVERRIDE, _CLI_INFO_CACHE
+    if name:
+        _ACTIVE_CLI_OVERRIDE = name.strip()
+        _CLI_INFO_CACHE = None
+
+
+def _active_cli_name() -> str:
+    return _ACTIVE_CLI_OVERRIDE or LLM_CLI
+
+
+def _resolve_cli() -> tuple[str, str | None, object]:
+    """Return (name, executable_path_or_None, argv_builder) for the active CLI."""
+    name = _active_cli_name()
+    builder = LLM_CLI_SPECS.get(name, LLM_CLI_SPECS["agy"])
+    exe = _find_cli(name, f"{name.upper()}_CLI_PATH")
+    return name, exe, builder
+
+
+def active_cli_info() -> dict:
+    """Name/path/version of the active CLI — used for the report model note."""
+    global _CLI_INFO_CACHE
+    if _CLI_INFO_CACHE is not None:
+        return _CLI_INFO_CACHE
+    name, exe, _ = _resolve_cli()
+    version = ""
+    if exe:
+        try:
+            p = _run_process([exe, "--version"], env=os.environ.copy(), timeout=15)
+            out = (p.stdout or "").strip()
+            version = out.splitlines()[0] if out else ""
+        except Exception:
+            version = ""
+    _CLI_INFO_CACHE = {"name": name, "path": exe or "", "version": version}
+    return _CLI_INFO_CACHE
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +165,7 @@ def _run_process(args: list[str], *, env: dict[str, str], timeout: int) -> Simpl
             proc.kill()
             stdout, stderr = proc.communicate()
             raise RuntimeError(
-                f"agy CLI timed out (>{timeout}s): {(stderr or stdout or '').strip()[:300]}"
+                f"LLM CLI timed out (>{timeout}s): {(stderr or stdout or '').strip()[:300]}"
             )
         try:
             stdout, stderr = proc.communicate(timeout=min(0.2, remaining))
@@ -179,40 +236,40 @@ def _repair_hint(exc: ValidationError) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
-def call_agy(prompt: str, timeout: int = AGY_TIMEOUT, desc: str | None = None) -> str:
-    """Call `agy -p prompt` and return the text response.
+def call_llm(prompt: str, timeout: int = LLM_TIMEOUT, desc: str | None = None) -> str:
+    """Call the active LLM CLI with a prompt and return its text response.
 
-    Pass ``desc`` to show an animated spinner while the CLI runs — useful for
-    long LLM calls where the user otherwise sees no activity.
+    Backend is selected by --cli / PW_LLM_CLI (default: agy). Pass ``desc`` to
+    show an animated spinner while the CLI runs.
     """
-    exe = _find_cli("agy", "AGY_CLI_PATH")
+    name, exe, build_argv = _resolve_cli()
     if not exe:
         raise RuntimeError(
-            "agy CLI not found. Install antigravity and ensure it is on PATH, "
-            "or set AGY_CLI_PATH=/path/to/agy."
+            f"LLM CLI '{name}' not found. Ensure it is on PATH, pick another with "
+            f"--cli, or set {name.upper()}_CLI_PATH=/path/to/{name}."
         )
     with _spinner(desc):
         proc = _run_process(
-            [exe, "-p", _safe_arg(prompt)],
+            build_argv(exe, _safe_arg(prompt)),
             env=os.environ.copy(),
             timeout=timeout,
         )
     if proc.returncode != 0:
-        raise RuntimeError(f"agy CLI failed (rc={proc.returncode}): {proc.stderr.strip()[:300]}")
+        raise RuntimeError(f"{name} CLI failed (rc={proc.returncode}): {proc.stderr.strip()[:300]}")
     return (proc.stdout or "").strip()
 
 
-def call_agy_structured(
+def call_llm_structured(
     prompt: str,
     schema: Type[BaseModel],
-    timeout: int = AGY_TIMEOUT,
+    timeout: int = LLM_TIMEOUT,
     max_tries: int = _MAX_TRIES,
     desc: str | None = None,
 ) -> BaseModel:
-    """Call agy with a JSON Schema instruction and validate against a Pydantic model.
+    """Call the LLM with a JSON Schema instruction and validate against a Pydantic model.
 
     Retries up to max_tries times, feeding field-level Pydantic errors back into
-    the prompt so the model can self-correct — same pattern as eu_jobsmith/llm_cli.py.
+    the prompt so the model can self-correct.
     """
     base_prompt = prompt.rstrip() + "\n\n" + _schema_instruction(schema)
     current_prompt = base_prompt
@@ -220,7 +277,7 @@ def call_agy_structured(
     last_raw = ""
 
     for _ in range(max(1, max_tries)):
-        raw = call_agy(current_prompt, timeout=timeout, desc=desc)
+        raw = call_llm(current_prompt, timeout=timeout, desc=desc)
         last_raw = raw
         json_text = _extract_json(raw)
         try:
@@ -237,21 +294,21 @@ def call_agy_structured(
             current_prompt = base_prompt + "\n\n" + _repair_hint(exc)
 
     raise RuntimeError(
-        f"agy structured output failed after {max_tries} tries: {last_err}; "
+        f"LLM structured output failed after {max_tries} tries: {last_err}; "
         f"last output: {last_raw.strip()[:200]!r}"
     ) from last_err
 
 
-def call_agy_json(prompt: str, timeout: int = AGY_TIMEOUT) -> dict | list:
-    """Call agy and return a plain dict/list (no Pydantic schema validation).
+def call_llm_json(prompt: str, timeout: int = LLM_TIMEOUT) -> dict | list:
+    """Call the LLM and return a plain dict/list (no Pydantic schema validation).
 
-    Use call_agy_structured() instead when you have a Pydantic model — it retries
+    Use call_llm_structured() instead when you have a Pydantic model — it retries
     with field-level repair hints and is more reliable.
     """
     json_prompt = (
         prompt.rstrip()
         + "\n\nRespond with ONLY valid JSON — no markdown fences, no explanation text."
     )
-    raw = call_agy(json_prompt, timeout=timeout)
+    raw = call_llm(json_prompt, timeout=timeout)
     json_text = _extract_json(raw)
     return json.loads(json_text)

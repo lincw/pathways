@@ -96,7 +96,7 @@ def get_reactome_pathway_description(pathway_stable_id: str) -> str:
         return ""
 
 
-def fetch_lps_pathways(search_terms: List[str]) -> List[PathwayEntry]:
+def fetch_pathways(search_terms: List[str]) -> List[PathwayEntry]:
     """Search Reactome with text terms and fetch genes for each pathway."""
     seen_ids: Set[str] = set()
     entries: List[PathwayEntry] = []

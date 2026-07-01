@@ -19,8 +19,8 @@ terms, the ones that ARE the queried pathway (same no-hardcoding philosophy as t
 pipeline). A run passes only if BOTH coverage and recall clear their thresholds.
 
 Usage:
-    python -m scripts.validate --results-dir results/20260701_025925 \
-        --query "LPS intracellular signaling pathway in human cells"
+    python -m scripts.validate --results-dir results/<run_folder> \
+        --query "TNF intracellular signaling pathway in human cells"
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from typing import Dict, List
 import requests
 from pydantic import BaseModel, Field
 
-from scripts.llm import call_agy_structured
+from scripts.llm import call_llm_structured
 
 GPROFILER_URL = "https://biit.cs.ut.ee/gprofiler/api/gost/profile/"
 # Independent reference sources. GO:BP is a curated, held-out reference (not a
@@ -51,14 +51,14 @@ RECALL_PASS = 0.30
 #            dominate a bloated set on p-value alone and drown the real pathway.
 #   < MIN  -> hyper-specific leaf terms too small to be a meaningful reference.
 # A size window (not a pathway name — no hardcoded biology); scoring still uses
-# whatever the LLM picks from within it. Tunable via LPS_VALIDATE_*_TERM_SIZE.
+# whatever the LLM picks from within it. Tunable via PW_VALIDATE_*_TERM_SIZE.
 import os as _os
-MIN_TARGET_TERM_SIZE = int(_os.getenv("LPS_VALIDATE_MIN_TERM_SIZE", "5"))
-MAX_TARGET_TERM_SIZE = int(_os.getenv("LPS_VALIDATE_MAX_TERM_SIZE", "1000"))
-SHORTLIST_SIZE = int(_os.getenv("LPS_VALIDATE_SHORTLIST", "70"))
+MIN_TARGET_TERM_SIZE = int(_os.getenv("PW_VALIDATE_MIN_TERM_SIZE", "5"))
+MAX_TARGET_TERM_SIZE = int(_os.getenv("PW_VALIDATE_MAX_TERM_SIZE", "1000"))
+SHORTLIST_SIZE = int(_os.getenv("PW_VALIDATE_SHORTLIST", "70"))
 # Fallback recall reference must be at least this big, so a tiny leaf term doesn't
 # make the denominator noisy when the LLM doesn't designate a primary.
-RECALL_REF_MIN_SIZE = int(_os.getenv("LPS_VALIDATE_RECALL_MIN_SIZE", "20"))
+RECALL_REF_MIN_SIZE = int(_os.getenv("PW_VALIDATE_RECALL_MIN_SIZE", "20"))
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +188,7 @@ Terms:
 """
     valid = {t["native"] for t in shortlist}
     try:
-        res = call_agy_structured(prompt, TargetTerms, desc="Validator: matching target terms...")
+        res = call_llm_structured(prompt, TargetTerms, desc="Validator: matching target terms...")
         picked = {n.strip() for n in res.target_natives}
         targets = [t["native"] for t in shortlist if t["native"] in picked]
         primary = res.primary_native.strip() if res.primary_native else ""

@@ -1,32 +1,40 @@
-"""Entry point for the LPS signaling pathway agentic pipeline.
+"""Entry point for the signaling-pathway agentic pipeline (any pathway).
 
 Usage:
-    cd ~/gdrive/01_Going_Projects/LPS_signaling_pathway
-    python -m scripts.main
-    python -m scripts.main --query "LPS-induced NF-kB and MAPK signaling in macrophages"
-    python -m scripts.main --visualise  # also draw the graph topology
+    python -m scripts.main --query "TNF intracellular signaling pathway in human cells"
+    python -m scripts.main --query "EGFR signaling" --cli claude
+    python -m scripts.main --query "Wnt signaling" --visualise  # also draw the graph
 """
 
 import argparse
 
+from scripts import llm
 from scripts.graph.pipeline import pipeline
 from scripts.state import PipelineState
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="LPS Signaling Pathway Agentic Pipeline (LangGraph + agy CLI)"
+        description="Signaling Pathway Agentic Pipeline (LangGraph, pluggable LLM CLI)"
     )
     parser.add_argument(
         "--query",
         type=str,
-        default="Systematic mapping of LPS intracellular signaling pathways in human macrophages",
-        help="Natural language query describing the biological goal",
+        required=True,
+        help="Natural language query naming the signaling pathway to map "
+             '(e.g. "TNF signaling", "EGFR signaling pathway in human cells")',
     )
     parser.add_argument(
         "--visualise",
         action="store_true",
         help="Print the LangGraph topology as a Mermaid diagram",
+    )
+    parser.add_argument(
+        "--cli",
+        type=str,
+        default=None,
+        choices=["agy", "claude", "gemini", "codex", "ollama"],
+        help="LLM CLI backend to drive reasoning calls (default: agy / PW_LLM_CLI)",
     )
     return parser.parse_args()
 
@@ -34,15 +42,22 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Select the LLM backend before any node runs.
+    llm.set_llm_cli(args.cli)
+    cli = llm.active_cli_info()
+
     if args.visualise:
         print("\n=== LangGraph Pipeline Topology (Mermaid) ===")
         print(pipeline.get_graph().draw_mermaid())
         print()
 
     print("=" * 60)
-    print("LPS Signaling Pathway Pipeline")
+    print("Signaling Pathway Pipeline")
     print("=" * 60)
     print(f"Query: {args.query}")
+    print(f"LLM CLI: {cli['name']} {cli['version']}".rstrip())
+    if not cli["path"]:
+        print(f"  WARNING: '{cli['name']}' not found on PATH — LLM calls will fail.")
     print()
 
     initial_state: PipelineState = {

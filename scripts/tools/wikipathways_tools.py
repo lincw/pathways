@@ -109,7 +109,7 @@ SELECT DISTINCT ?label WHERE {{
         return []
 
 
-def fetch_lps_pathways(search_terms: List[str]) -> List[PathwayEntry]:
+def fetch_pathways(search_terms: List[str]) -> List[PathwayEntry]:
     """Search WikiPathways and fetch genes for each matched pathway."""
     seen_ids: Set[str] = set()
     entries: List[PathwayEntry] = []

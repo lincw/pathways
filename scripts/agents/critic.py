@@ -2,7 +2,7 @@
 
 No hardcoded biology. On iteration 1, the LLM generates the required
 components from the query (stored in state). Subsequent iterations reuse them.
-This makes the pipeline work for any pathway query, not just LPS.
+This makes the pipeline work for any signaling-pathway query.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import List
 from pydantic import BaseModel, Field
 
 from scripts.config import MAX_REFLECTION_ITERATIONS
-from scripts.llm import call_agy_structured
+from scripts.llm import call_llm_structured
 from scripts.state import PipelineState
 
 
@@ -51,7 +51,7 @@ that a COMPLETE database analysis MUST cover to be considered comprehensive.
 Be specific: include receptor names, adaptor proteins, kinase cascades,
 transcription factors, and regulatory mechanisms.
 """
-    result = call_agy_structured(prompt, ComponentsOutput, desc="Critic: defining evaluation checklist...")
+    result = call_llm_structured(prompt, ComponentsOutput, desc="Critic: defining evaluation checklist...")
     return result.required_components
 
 
@@ -89,7 +89,7 @@ For each required component, check whether it is represented in the pathway name
 or gene list above. Mark is_sufficient=false if any critical signaling component is absent.
 """
 
-    result = call_agy_structured(prompt, CriticOutput, desc=f"Critic: evaluating coverage (iteration {iteration})...")
+    result = call_llm_structured(prompt, CriticOutput, desc=f"Critic: evaluating coverage (iteration {iteration})...")
 
     print(f"  [Critic] iteration={iteration}, gaps={len(result.missing_components)}, "
           f"sufficient={result.is_sufficient}")

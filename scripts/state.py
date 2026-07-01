@@ -1,4 +1,4 @@
-"""LangGraph shared state for the LPS signaling pipeline."""
+"""LangGraph shared state for the signaling-pathway pipeline."""
 
 import operator
 from typing import Annotated, Dict, List, TypedDict

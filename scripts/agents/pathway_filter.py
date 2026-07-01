@@ -1,10 +1,9 @@
 """Pathway relevance filter — removes hub-gene over-inclusion.
 
 Gene-based lookup (esp. KEGG) pulls in every pathway that shares a promiscuous
-hub gene (NFKB1, MAPK1, AKT1 ...), so a query for "LPS signaling" drags in
-"Pathways in cancer", "Alzheimer disease", "Thermogenesis", etc. This node cuts
-that noise with two data-driven stages and NO hardcoded pathway names or ID
-patterns:
+hub gene (NFKB1, MAPK1, AKT1 ...), so a signaling query drags in "Pathways in
+cancer", "Alzheimer disease", "Thermogenesis", etc. This node cuts that noise
+with two data-driven stages and NO hardcoded pathway names or ID patterns:
 
   Stage 1 — Statistical enrichment (hypergeometric ORA):
       Keep a pathway only if its overlap with the seed-gene set is statistically
@@ -17,8 +16,8 @@ patterns:
       large hub-rich but off-topic maps (e.g. cancer/neurodegeneration) are
       removed even when they pass the statistical test.
 
-Both stages are pure functions of the seed set and the user query; nothing about
-LPS biology is baked into the code.
+Both stages are pure functions of the seed set and the user query; no pathway-
+specific biology is baked into the code.
 """
 
 from __future__ import annotations
@@ -36,7 +35,7 @@ from scripts.config import (
     LLM_GATE_CHUNK,
     LLM_RELEVANCE_GATE,
 )
-from scripts.llm import call_agy_structured
+from scripts.llm import call_llm_structured
 from scripts.state import PathwayEntry, PipelineState, dedup_pathways
 
 
@@ -153,7 +152,7 @@ Candidates:
 {listing}
 """
     try:
-        result = call_agy_structured(
+        result = call_llm_structured(
             prompt, RelevanceOutput,
             desc=f"Relevance gate: judging {len(chunk)} pathways...",
         )

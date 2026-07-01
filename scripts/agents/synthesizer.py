@@ -1,4 +1,4 @@
-"""Synthesis node — builds the unified LPS signaling gene-pathway graph.
+"""Synthesis node — builds the unified signaling gene-pathway graph.
 
 Removed hub_genes (not needed). Focuses on building the bipartite
 gene ↔ pathway graph with provenance (which DB contributed each edge).

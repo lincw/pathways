@@ -11,7 +11,7 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
-from scripts.llm import call_agy_structured
+from scripts.llm import call_llm_structured
 from scripts.state import PipelineState
 
 
@@ -27,22 +27,21 @@ class PlannerOutput(BaseModel):
 
 def planner_node(state: PipelineState) -> dict:
     iteration = state.get("iteration", 0)
-    query = state.get("query", "LPS intracellular signaling")
+    query = state.get("query", "intracellular signaling pathway")
 
     if iteration == 0:
         prompt = f"""You are a computational biologist planning a systematic pathway database query.
 
 Goal: {query}
 
-Generate:
+Generate, specifically for the pathway named in the Goal (do not default to any
+other pathway):
 1. search_terms: 6-10 text strings for searching Reactome and WikiPathways databases.
-   Examples: "Toll-like receptor signaling", "MyD88 signaling", "NF-kB activation",
-   "innate immune response", "TRIF signaling", "type I interferon"
+   Cover the canonical cascade name, its key branches, and its major outputs.
 
-2. seed_genes: 10-20 human gene symbols to use for KEGG gene-based pathway lookup.
-   Include: receptors, adaptors, kinases, ubiquitin ligases, transcription factors,
-   and negative regulators relevant to the goal.
-   Examples: TLR4, MYD88, TICAM1, IRAK4, IRAK1, TRAF6, MAP3K7, CHUK, RELA, IRF3
+2. seed_genes: 10-20 human gene symbols for KEGG gene-based pathway lookup.
+   Span the pathway's receptors, adaptors, kinases/enzymes, ubiquitin ligases,
+   transcription factors, and negative regulators.
 
 3. plan: brief strategy description.
 """
@@ -50,7 +49,7 @@ Generate:
         gaps = state.get("coverage_gaps", [])
         extra_genes = state.get("additional_seed_genes", [])
         extra_terms = state.get("additional_search_terms", [])
-        prompt = f"""You are filling gaps in an LPS pathway analysis.
+        prompt = f"""You are filling gaps in a pathway analysis for: {query}.
 
 Coverage gaps identified:
 {json.dumps(gaps, indent=2)}
@@ -62,13 +61,13 @@ Generate NEW (non-overlapping) terms and genes targeting these gaps:
 """
 
     label = "Planner: gap-fill query..." if iteration > 0 else "Planner: generating search strategy..."
-    result = call_agy_structured(prompt, PlannerOutput, desc=label)
+    result = call_llm_structured(prompt, PlannerOutput, desc=label)
 
     return {
         "search_terms": result.search_terms,
         "seed_genes": result.seed_genes,
         # Accumulate seeds across iterations (operator.add reducer) so the
-        # enrichment filter tests pathways against the full LPS query set.
+        # enrichment filter tests pathways against the full query seed set.
         "seed_gene_pool": list(result.seed_genes),
         "plan": result.plan,
         "iteration": iteration + 1,

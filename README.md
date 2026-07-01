@@ -14,7 +14,9 @@ Built with **LangGraph** using the Agentic Design Patterns:
 | Tool Use (Ch.5) | REST API tools for KEGG, Reactome, WikiPathways; MyGene.info for ID mapping |
 | Multi-agent (Ch.7) | Eight specialized agent nodes, each with a single responsibility |
 
-**LLM backend:** `agy -p "prompt"` (antigravity CLI — no API key required)
+**LLM backend:** pluggable CLI — `agy` (default), `claude`, `gemini`, `codex`, or `ollama`.
+Pick one with `--cli <name>` or `PW_LLM_CLI`; the chosen model is recorded in every
+`report.md`. Default `agy` needs no API key.
 
 ## Prerequisites
 
@@ -93,7 +95,7 @@ with **no hardcoded pathway names or ID patterns**:
 
 Both stages are pure functions of the seed set and the user query. Tune or disable
 them via `ENRICHMENT_*` and `LLM_*` settings in `config.py` (or the matching
-`LPS_*` environment variables).
+`PW_*` environment variables).
 
 ## Independent validation (built-in QC)
 
@@ -110,7 +112,7 @@ A `PASS`/`FAIL` verdict plus the matched terms are written into `report.md` and
 `pipeline_state.json`. To score any existing run manually:
 
 ```bash
-python -m scripts.validate --results-dir results/<timestamp> --query "<the query>"
+python -m scripts.validate --results-dir results/<run_folder> --query "<the query>"
 ```
 
 ## Reflection loop
@@ -122,7 +124,8 @@ After the three DB agents run in parallel and the relevance filter prunes the se
 Edit `scripts/config.py` to tune:
 
 ```python
-AGY_TIMEOUT = 120               # seconds per agy CLI call
+LLM_CLI = "agy"                 # backend: agy|claude|gemini|codex|ollama (PW_LLM_CLI / --cli)
+LLM_TIMEOUT = 120               # seconds per LLM CLI call (PW_LLM_TIMEOUT)
 MAX_REFLECTION_ITERATIONS = 2   # reflection loop budget
 OUTPUT_DIR = Path("outputs")    # where results are written
 ```

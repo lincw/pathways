@@ -12,7 +12,7 @@ def kegg_agent_node(state: PipelineState) -> dict:
     seed_genes = state.get("seed_genes", [])
     print(f"  [KEGG] starting with {len(seed_genes)} seed genes: {seed_genes[:5]}", flush=True)
     try:
-        pathways = kegg_tools.fetch_lps_pathways(seed_genes)
+        pathways = kegg_tools.fetch_pathways(seed_genes)
     except Exception as exc:
         print(f"  [KEGG] ERROR: {exc}", flush=True)
         pathways = []
@@ -24,7 +24,7 @@ def reactome_agent_node(state: PipelineState) -> dict:
     search_terms = state.get("search_terms", [])
     print(f"  [Reactome] querying {len(search_terms)} terms...", flush=True)
     try:
-        pathways = reactome_tools.fetch_lps_pathways(search_terms)
+        pathways = reactome_tools.fetch_pathways(search_terms)
     except Exception as exc:
         print(f"  [Reactome] ERROR: {exc}", flush=True)
         pathways = []

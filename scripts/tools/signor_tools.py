@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from scripts.config import SIGNOR_BASE
-from scripts.llm import call_agy_structured
+from scripts.llm import call_llm_structured
 from scripts.state import PathwayEntry
 
 _GENE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,14}$")
@@ -132,7 +132,7 @@ Aim for 5–12 pathways.
 SIGNOR catalogue:
 {catalogue}
 """
-    result = call_agy_structured(
+    result = call_llm_structured(
         prompt,
         _PathwaySelection,
         desc="SIGNOR: selecting relevant pathways...",

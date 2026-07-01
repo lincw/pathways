@@ -97,7 +97,7 @@ def _get_pathway_name_and_desc(pathway_id: str, raw: str) -> tuple[str, str]:
     return name, desc
 
 
-def fetch_lps_pathways(seed_genes: List[str]) -> List[PathwayEntry]:
+def fetch_pathways(seed_genes: List[str]) -> List[PathwayEntry]:
     """Main entry: find all KEGG pathways containing any of the seed genes."""
     seen_pathway_ids: Set[str] = set()
     entries: List[PathwayEntry] = []
