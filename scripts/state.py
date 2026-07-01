@@ -41,6 +41,7 @@ class PipelineState(TypedDict):
     # --- Synthesis ---
     nodes: List[Dict]
     edges: List[Dict]            # protein→protein signaling edges (set by network_builder)
+    robust_edges: List[Dict]     # directed pairs asserted by >=ROBUST_MIN_SUPPORT DBs
     db_coverage: Dict[str, int]
     network_stats: Dict
 

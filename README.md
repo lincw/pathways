@@ -15,8 +15,11 @@ Built with **LangGraph** using the Agentic Design Patterns:
 | Multi-agent (Ch.7) | Eight specialized agent nodes, each with a single responsibility |
 
 **LLM backend:** pluggable CLI — `agy` (default), `claude`, `gemini`, `codex`, or `ollama`.
-Pick one with `--cli <name>` or `PW_LLM_CLI`; the chosen model is recorded in every
-`report.md`. Default `agy` needs no API key.
+Pick one with `--cli <name>` or `PW_LLM_CLI`. Every `report.md` records the **CLI**
+(name + `--version`) and the **model**. CLIs don't reliably report their own model, so
+**`--model` is required** and is a *user-declared label* (e.g. `claude-opus-4-8`) recorded
+verbatim in the note — you own its accuracy. Where the CLI supports model selection
+(`agy`, `ollama`) the label is also passed through to the CLI. Default `agy` needs no API key.
 
 ## Prerequisites
 
@@ -39,13 +42,13 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-# Provide any natural-language query
-python -m scripts.main --query "LPS intracellular signaling pathway in human macrophages"
-python -m scripts.main --query "TNF-alpha intracellular signaling in human endothelial cells"
-python -m scripts.main --query "IL-6 JAK-STAT signaling in hepatocytes"
+# Provide any natural-language query. --model is REQUIRED (user-declared label).
+python -m scripts.main --query "LPS intracellular signaling pathway in human macrophages" --model "claude-opus-4-8"
+python -m scripts.main --query "TNF-alpha intracellular signaling in human endothelial cells" --model "gemini-2.5-pro"
+python -m scripts.main --query "IL-6 JAK-STAT signaling in hepatocytes" --cli ollama --model "llama3.1"
 
 # Also print the LangGraph topology as a Mermaid diagram
-python -m scripts.main --visualise
+python -m scripts.main --query "Wnt signaling" --model "claude-opus-4-8" --visualise
 ```
 
 ## Output
@@ -57,7 +60,8 @@ Each run creates a `results/<query-slug>_<timestamp>/` directory:
 | `report.md` | Systematic biological narrative (+ AI-model note and QC block) |
 | `pathways.tsv` | All pathways found (source, ID, name, gene count, gene list) |
 | `genes.tsv` | Unique genes with Entrez / UniProt / Ensembl IDs |
-| `network_edges.tsv` | Directed protein→protein signaling edges (`source, target, effect, mechanism, db`) from SIGNOR causal relations + KEGG KGML |
+| `network_edges.tsv` | Directed protein→protein signaling edges (`source, target, effect, mechanism, db, support, db_support`) from SIGNOR causal relations, KEGG KGML, and Reactome reactions |
+| `robust_edges.tsv` | Cross-database **consensus** sub-network: directed pairs asserted by ≥2 sources (`support, db_support, effects, mechanisms`) |
 | `pipeline_state.json` | Full pipeline metadata snapshot |
 
 ## Progress display
@@ -76,6 +80,32 @@ The pipeline prints per-step progress while running:
 | **KEGG** | Broad pathway coverage, stable IDs | Gene-based: seed gene → gene ID → pathway IDs → flat file parse |
 | **Reactome** | Deep human signaling, curated hierarchy | ContentService REST: text search → `/data/participants/{id}` |
 | **SIGNOR** | Causal signaling edges (who activates/inhibits whom + mechanism) | REST: keyword filter on pathway list → `/api/pathway/{id}/relations/` |
+
+### Directed edges (`network_edges.tsv`)
+
+The signaling network is built from **directed protein→protein edges**, extracted
+from each database's native causal model (verified against live API responses):
+
+- **SIGNOR** — `entitya → entityb`, `up-/down-regulates` → activation/inhibition.
+- **KEGG** — KGML `PPrel`/`GErel` relations `entry1 → entry2`, subtype gives sign.
+- **Reactome** — reaction-centric, so edges are *projected* per reaction:
+  `catalyst → output` (real direction; catalysis asserts no sign → `effect=unknown`)
+  and `regulator → output` (signed: `PositiveRegulation`→activation,
+  `NegativeRegulation`→inhibition). Complexes/sets are flattened to member
+  proteins; non-protein participants (small molecules) are dropped. Bounded by
+  `PW_REACTOME_EDGE_MAX_RXN` and toggled by `PW_REACTOME_EDGES`.
+
+### Robust conserved network (cross-database consensus)
+
+Each directed `source → target` interaction is annotated with **`support`** — the
+number of independent databases (SIGNOR, KEGG, Reactome) that assert it. Edges
+confirmed by **≥ `PW_ROBUST_MIN_SUPPORT`** sources (default 2) form the *robust*
+conserved sub-network, written to `robust_edges.tsv` and summarised in `report.md`.
+This is the database-consensus analogue of the run-to-run reproducibility check:
+an interaction curated independently by multiple resources is the trustworthy
+backbone, so raising the threshold to 3 keeps only edges seen in **all three**
+sources. Where databases report different signs the `effects` column lists them
+verbatim (e.g. `activation|unknown`) rather than silently merging them.
 
 ## Relevance filter
 
@@ -125,6 +155,7 @@ Edit `scripts/config.py` to tune:
 
 ```python
 LLM_CLI = "agy"                 # backend: agy|claude|gemini|codex|ollama (PW_LLM_CLI / --cli)
+LLM_MODEL = ""                  # model id recorded in report note (PW_LLM_MODEL / --model)
 LLM_TIMEOUT = 120               # seconds per LLM CLI call (PW_LLM_TIMEOUT)
 MAX_REFLECTION_ITERATIONS = 2   # reflection loop budget
 OUTPUT_DIR = Path("outputs")    # where results are written

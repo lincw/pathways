@@ -36,14 +36,25 @@ def parse_args():
         choices=["agy", "claude", "gemini", "codex", "ollama"],
         help="LLM CLI backend to drive reasoning calls (default: agy / PW_LLM_CLI)",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        help="REQUIRED. The model identifier to record in the report note "
+             "(e.g. 'claude-opus-4-8' / 'Claude Opus 4.6 (Thinking)'). This is a "
+             "user-declared label — CLIs don't reliably report their own model, so "
+             "you assign it. Where the CLI supports it (agy, ollama) it is also "
+             "passed to the CLI. Also settable via PW_LLM_MODEL.",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
-    # Select the LLM backend before any node runs.
+    # Select the LLM backend + record the model before any node runs.
     llm.set_llm_cli(args.cli)
+    llm.set_llm_model(args.model)
     cli = llm.active_cli_info()
 
     if args.visualise:
@@ -56,6 +67,7 @@ def main():
     print("=" * 60)
     print(f"Query: {args.query}")
     print(f"LLM CLI: {cli['name']} {cli['version']}".rstrip())
+    print(f"Model:   {cli['model']} (user-declared)")
     if not cli["path"]:
         print(f"  WARNING: '{cli['name']}' not found on PATH — LLM calls will fail.")
     print()
@@ -73,6 +85,7 @@ def main():
         "id_mapping": {},
         "nodes": [],
         "edges": [],
+        "robust_edges": [],
         "db_coverage": {},
         "network_stats": {},
         "required_components": [],

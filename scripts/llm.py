@@ -23,7 +23,7 @@ from typing import Type
 
 from pydantic import BaseModel, ValidationError
 
-from scripts.config import LLM_TIMEOUT, LLM_CLI, OLLAMA_MODEL
+from scripts.config import LLM_TIMEOUT, LLM_CLI, LLM_MODEL, OLLAMA_MODEL
 from scripts.progress import spinner as _spinner
 
 _MAX_TRIES = 3
@@ -35,15 +35,33 @@ _MAX_TRIES = 3
 # (or JSON) on stdout. Default backend is agy; switch with --cli / PW_LLM_CLI.
 # ---------------------------------------------------------------------------
 
+# Each backend declares how to build its argv, and — only where verified — how to
+# inject an explicit model so the recorded model note is *enforced*, not merely
+# claimed. A backend without a `model_argv` cannot have its model selected/verified
+# by the pipeline, so its report note reads "CLI default (not recorded)" and any
+# --model value is ignored (with a warning) rather than stamped as a false label.
 LLM_CLI_SPECS = {
-    "agy":    lambda exe, p: [exe, "-p", p],
-    "claude": lambda exe, p: [exe, "-p", p],                       # Claude Code print mode
-    "gemini": lambda exe, p: [exe, "-p", p],
-    "codex":  lambda exe, p: [exe, "exec", "--skip-git-repo-check", p],
-    "ollama": lambda exe, p: [exe, "run", OLLAMA_MODEL, p],
+    "agy": {
+        "argv": lambda exe, p: [exe, "-p", p],
+        "model_argv": lambda exe, p, m: [exe, "--model", m, "-p", p],  # verified: `agy --model`
+    },
+    "claude": {  # Claude Code print mode — model flag not verified here
+        "argv": lambda exe, p: [exe, "-p", p],
+    },
+    "gemini": {
+        "argv": lambda exe, p: [exe, "-p", p],
+    },
+    "codex": {
+        "argv": lambda exe, p: [exe, "exec", "--skip-git-repo-check", p],
+    },
+    "ollama": {  # model is always explicit in `ollama run <model>`
+        "argv": lambda exe, p: [exe, "run", OLLAMA_MODEL, p],
+        "model_argv": lambda exe, p, m: [exe, "run", m, p],
+    },
 }
 
 _ACTIVE_CLI_OVERRIDE: str | None = None
+_ACTIVE_MODEL_OVERRIDE: str | None = None
 _CLI_INFO_CACHE: dict | None = None
 
 
@@ -55,24 +73,52 @@ def set_llm_cli(name: str | None) -> None:
         _CLI_INFO_CACHE = None
 
 
+def set_llm_model(model: str | None) -> None:
+    """Override the recorded model name at runtime (e.g. from --model)."""
+    global _ACTIVE_MODEL_OVERRIDE, _CLI_INFO_CACHE
+    if model:
+        _ACTIVE_MODEL_OVERRIDE = model.strip()
+        _CLI_INFO_CACHE = None
+
+
 def _active_cli_name() -> str:
     return _ACTIVE_CLI_OVERRIDE or LLM_CLI
 
 
-def _resolve_cli() -> tuple[str, str | None, object]:
-    """Return (name, executable_path_or_None, argv_builder) for the active CLI."""
+def _declared_model(name: str) -> str:
+    """The user-declared model label: --model / PW_LLM_MODEL, or ollama's config.
+
+    CLIs do not reliably report their own model, so this is the user's assertion
+    (required via --model). It is recorded verbatim in the report note.
+    """
+    if _ACTIVE_MODEL_OVERRIDE:
+        return _ACTIVE_MODEL_OVERRIDE
+    if LLM_MODEL:
+        return LLM_MODEL
+    if name == "ollama":
+        return OLLAMA_MODEL
+    return ""
+
+
+def _resolve_cli() -> tuple[str, str | None, dict]:
+    """Return (name, executable_path_or_None, spec_dict) for the active CLI."""
     name = _active_cli_name()
-    builder = LLM_CLI_SPECS.get(name, LLM_CLI_SPECS["agy"])
+    spec = LLM_CLI_SPECS.get(name, LLM_CLI_SPECS["agy"])
     exe = _find_cli(name, f"{name.upper()}_CLI_PATH")
-    return name, exe, builder
+    return name, exe, spec
 
 
 def active_cli_info() -> dict:
-    """Name/path/version of the active CLI — used for the report model note."""
+    """Name/path/CLI-version/model of the active backend — for the report note.
+
+    ``version`` is the CLI tool's own version (``<cli> --version``); ``model`` is
+    the underlying LLM identifier (from --model / PW_LLM_MODEL / ollama config),
+    or empty when the CLI does not expose it.
+    """
     global _CLI_INFO_CACHE
     if _CLI_INFO_CACHE is not None:
         return _CLI_INFO_CACHE
-    name, exe, _ = _resolve_cli()
+    name, exe, spec = _resolve_cli()
     version = ""
     if exe:
         try:
@@ -81,7 +127,12 @@ def active_cli_info() -> dict:
             version = out.splitlines()[0] if out else ""
         except Exception:
             version = ""
-    _CLI_INFO_CACHE = {"name": name, "path": exe or "", "version": version}
+    _CLI_INFO_CACHE = {
+        "name": name,
+        "path": exe or "",
+        "version": version,
+        "model": _declared_model(name),         # user-declared label, recorded verbatim
+    }
     return _CLI_INFO_CACHE
 
 
@@ -242,18 +293,22 @@ def call_llm(prompt: str, timeout: int = LLM_TIMEOUT, desc: str | None = None) -
     Backend is selected by --cli / PW_LLM_CLI (default: agy). Pass ``desc`` to
     show an animated spinner while the CLI runs.
     """
-    name, exe, build_argv = _resolve_cli()
+    name, exe, spec = _resolve_cli()
     if not exe:
         raise RuntimeError(
             f"LLM CLI '{name}' not found. Ensure it is on PATH, pick another with "
             f"--cli, or set {name.upper()}_CLI_PATH=/path/to/{name}."
         )
+    safe_prompt = _safe_arg(prompt)
+    model = _declared_model(name)
+    # Where the CLI supports model selection (agy, ollama), pass the declared
+    # model through; otherwise the CLI runs its own default.
+    if model and "model_argv" in spec:
+        argv = spec["model_argv"](exe, safe_prompt, model)
+    else:
+        argv = spec["argv"](exe, safe_prompt)
     with _spinner(desc):
-        proc = _run_process(
-            build_argv(exe, _safe_arg(prompt)),
-            env=os.environ.copy(),
-            timeout=timeout,
-        )
+        proc = _run_process(argv, env=os.environ.copy(), timeout=timeout)
     if proc.returncode != 0:
         raise RuntimeError(f"{name} CLI failed (rc={proc.returncode}): {proc.stderr.strip()[:300]}")
     return (proc.stdout or "").strip()
