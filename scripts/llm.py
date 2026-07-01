@@ -54,13 +54,13 @@ LLM_CLI_SPECS = {
     "codex": {
         "argv": lambda exe, p: [exe, "exec", "--skip-git-repo-check", p],
     },
-    "ollama": {  # model is always explicit in `ollama run <model>`
+    # NOTE: ollama does NOT generate via this argv — call_llm routes it to the
+    # HTTP API (_call_ollama_api). The `ollama run` CLI renders for a terminal
+    # (spinner, ANSI word-wrap) which corrupts machine-readable output. The argv
+    # here is kept only for `ollama --version` discovery in active_cli_info.
+    "ollama": {
         "argv": lambda exe, p: [exe, "run", OLLAMA_MODEL, p],
         "model_argv": lambda exe, p, m: [exe, "run", m, p],
-        # Grammar-constrained JSON decoding: guarantees parseable output, which
-        # small local models otherwise mangle (unescaped quotes, missing commas).
-        # Inserted before the positional prompt only for JSON-mode calls.
-        "json_flags": ["--format", "json"],
     },
 }
 
@@ -345,6 +345,25 @@ def _loads_lenient(candidate: str) -> object:
         return json.loads(repaired, strict=False)
 
 
+def _candidate_payloads(payload: object):
+    """Yield the payload plus likely-unwrapped variants for schema validation.
+
+    Small models sometimes echo the JSON-Schema envelope we send them, nesting
+    the real instance under a ``"properties"`` key (or a single wrapper key like
+    the schema title). Yielding those unwrapped variants lets validation recover
+    ``{"properties": {"x": 1}}`` -> ``{"x": 1}`` instead of failing.
+    """
+    yield payload
+    if isinstance(payload, dict):
+        inner = payload.get("properties")
+        if isinstance(inner, dict) and inner is not payload:
+            yield inner
+        if len(payload) == 1:
+            (only,) = payload.values()
+            if isinstance(only, dict):
+                yield only
+
+
 def _extract_json(text: str) -> str:
     """Extract the first complete JSON object from LLM output (best-effort).
 
@@ -382,6 +401,56 @@ def _repair_hint(exc: ValidationError) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Ollama HTTP API — used instead of `ollama run`, which renders for a terminal
+# (spinner + ANSI word-wrap) and corrupts machine-readable output. The API
+# returns the answer in a clean `response` field, keeps any reasoning in a
+# separate `thinking` field, and accepts a JSON Schema as `format` for
+# schema-constrained decoding (guaranteed-valid, correctly-shaped output).
+# ---------------------------------------------------------------------------
+
+def _ollama_host() -> str:
+    """Base URL of the Ollama server (honours OLLAMA_HOST, defaults to local)."""
+    host = (os.environ.get("OLLAMA_HOST") or "").strip() or "http://127.0.0.1:11434"
+    if not host.startswith(("http://", "https://")):
+        host = "http://" + host
+    return host.rstrip("/")
+
+
+def _call_ollama_api(prompt: str, model: str, *, fmt, timeout: int) -> str:
+    """POST to Ollama's /api/generate and return the clean `response` text.
+
+    ``fmt`` may be a JSON Schema dict (schema-constrained), the string "json"
+    (any valid JSON), or None (free text). Degrades gracefully: if the server
+    rejects `think` or a schema `format`, it retries without that feature.
+    """
+    import requests
+
+    url = _ollama_host() + "/api/generate"
+    body: dict = {"model": model, "prompt": prompt, "stream": False, "think": False}
+    if fmt is not None:
+        body["format"] = fmt
+    last_text = ""
+    for _ in range(3):
+        try:
+            resp = requests.post(url, json=body, timeout=timeout)
+        except requests.RequestException as e:
+            raise RuntimeError(f"Ollama API request to {url} failed: {e}") from e
+        if resp.status_code == 200:
+            return (resp.json().get("response") or "").strip()
+        last_text = resp.text or ""
+        low = last_text.lower()
+        # Degrade unsupported features and retry rather than hard-failing.
+        if "think" in body and "think" in low:
+            body.pop("think", None)
+            continue
+        if isinstance(body.get("format"), dict):  # schema-constrained unsupported
+            body["format"] = "json"
+            continue
+        break
+    raise RuntimeError(f"Ollama API error at {url}: {last_text[:300]}")
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -390,32 +459,37 @@ def call_llm(
     timeout: int = LLM_TIMEOUT,
     desc: str | None = None,
     json_mode: bool = False,
+    json_schema: dict | None = None,
 ) -> str:
-    """Call the active LLM CLI with a prompt and return its text response.
+    """Call the active LLM backend with a prompt and return its text response.
 
     Backend is selected by --cli / PW_LLM_CLI (default: agy). Pass ``desc`` to
-    show an animated spinner while the CLI runs. ``json_mode=True`` requests
-    grammar-constrained JSON output where the backend supports it (e.g. Ollama's
-    ``--format json``), guaranteeing parseable output from small local models.
+    show an animated spinner while the call runs. ``json_mode=True`` requests
+    JSON output; ``json_schema`` additionally constrains it to that schema where
+    the backend supports it (Ollama), guaranteeing valid, correctly-shaped JSON.
+    Ollama is driven via its HTTP API; all other backends shell out to their CLI.
     """
     name, exe, spec = _resolve_cli()
+    safe_prompt = _safe_arg(prompt)
+    model = _declared_model(name)
+
+    if name == "ollama":
+        # Prefer schema-constrained decoding, else plain JSON mode, else free text.
+        fmt = json_schema if json_schema is not None else ("json" if json_mode else None)
+        with _spinner(desc):
+            return _call_ollama_api(safe_prompt, model or OLLAMA_MODEL, fmt=fmt, timeout=timeout)
+
     if not exe:
         raise RuntimeError(
             f"LLM CLI '{name}' not found. Ensure it is on PATH, pick another with "
             f"--cli, or set {name.upper()}_CLI_PATH=/path/to/{name}."
         )
-    safe_prompt = _safe_arg(prompt)
-    model = _declared_model(name)
-    # Where the CLI supports model selection (agy, ollama), pass the declared
-    # model through; otherwise the CLI runs its own default.
+    # Where the CLI supports model selection (agy), pass the declared model
+    # through; otherwise the CLI runs its own default.
     if model and "model_argv" in spec:
         argv = spec["model_argv"](exe, safe_prompt, model)
     else:
         argv = spec["argv"](exe, safe_prompt)
-    # Insert JSON-mode flags before the trailing positional prompt (the prompt is
-    # always the last argv element across all backends).
-    if json_mode and spec.get("json_flags"):
-        argv = argv[:-1] + list(spec["json_flags"]) + argv[-1:]
     with _spinner(desc):
         proc = _run_process(argv, env=os.environ.copy(), timeout=timeout)
     if proc.returncode != 0:
@@ -439,9 +513,13 @@ def call_llm_structured(
     current_prompt = base_prompt
     last_err: Exception | None = None
     last_raw = ""
+    json_schema = schema.model_json_schema()
 
     for _ in range(max(1, max_tries)):
-        raw = call_llm(current_prompt, timeout=timeout, desc=desc, json_mode=True)
+        raw = call_llm(
+            current_prompt, timeout=timeout, desc=desc,
+            json_mode=True, json_schema=json_schema,
+        )
         last_raw = raw
         # Reasoning models emit the answer AFTER their thinking (which may itself
         # contain JSON-shaped examples), so try every balanced {...} candidate,
@@ -455,10 +533,11 @@ def call_llm_structured(
             except json.JSONDecodeError as exc:
                 json_err = exc
                 continue
-            try:
-                return schema.model_validate(payload)
-            except ValidationError as exc:
-                val_err = exc
+            for obj in _candidate_payloads(payload):
+                try:
+                    return schema.model_validate(obj)
+                except ValidationError as exc:
+                    val_err = exc
         # No candidate validated — re-prompt with the most actionable hint.
         if val_err is not None:
             last_err = val_err
