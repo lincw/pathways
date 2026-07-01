@@ -229,13 +229,32 @@ def _run_process(args: list[str], *, env: dict[str, str], timeout: int) -> Simpl
 # JSON extraction
 # ---------------------------------------------------------------------------
 
+# Terminal control sequences some CLIs stream into stdout (e.g. Ollama's live
+# "thinking" spinner redrawing the line with cursor moves / erase-line codes).
+# These embed raw \x1b bytes that make json.loads fail with "Invalid control
+# character", so we scrub them before parsing. Covers CSI (\x1b[...), OSC
+# (\x1b]...BEL/ST), and lone two-char escapes.
+_ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
+# Leftover C0 control chars (backspace, carriage return, etc.) other than the
+# whitespace JSON tolerates natively.
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _strip_terminal_noise(text: str) -> str:
+    """Remove ANSI escape sequences and stray control chars from CLI output."""
+    if not text:
+        return text
+    text = _ANSI_RE.sub("", text)
+    return _CTRL_RE.sub("", text)
+
+
 def _extract_json(text: str) -> str:
     """Extract the first complete JSON object from LLM output.
 
     Strips markdown fences, then uses balanced-bracket scanning that ignores
     bracket characters inside strings — handles nested objects correctly.
     """
-    text = (text or "").strip()
+    text = _strip_terminal_noise((text or "").strip())
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text).strip()
     start = text.find("{")
@@ -336,7 +355,7 @@ def call_llm_structured(
         last_raw = raw
         json_text = _extract_json(raw)
         try:
-            payload = json.loads(json_text)
+            payload = json.loads(json_text, strict=False)
             return schema.model_validate(payload)
         except json.JSONDecodeError as exc:
             last_err = exc
@@ -366,4 +385,4 @@ def call_llm_json(prompt: str, timeout: int = LLM_TIMEOUT) -> dict | list:
     )
     raw = call_llm(json_prompt, timeout=timeout)
     json_text = _extract_json(raw)
-    return json.loads(json_text)
+    return json.loads(json_text, strict=False)
