@@ -18,7 +18,7 @@ class PipelineState(TypedDict):
 
     # --- Planner output ---
     search_terms: List[str]     # text terms for Reactome / WikiPathways
-    seed_genes: List[str]       # gene symbols for KEGG gene-based lookup
+    seed_genes: List[str]       # representative core genes (context/hints, not a lookup key)
     plan: str
     iteration: int
 

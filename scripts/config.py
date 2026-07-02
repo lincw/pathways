@@ -31,11 +31,17 @@ LLM_MODEL = os.getenv("PW_LLM_MODEL", "")
 MAX_REFLECTION_ITERATIONS = int(os.getenv("PW_MAX_REFLECTIONS", "2"))
 
 # --- Pathway relevance filtering -------------------------------------------
-# Two data-driven stages remove hub-gene over-inclusion WITHOUT any hardcoded
-# pathway names or ID patterns:
-#   1. Hypergeometric over-representation (ORA) of the seed-gene set.
-#   2. LLM relevance gate driven by the user query.
-ENRICHMENT_ENABLED = os.getenv("PW_ENRICHMENT", "1") != "0"
+# Collection is pathway-anchored: each database (KEGG, SIGNOR via LLM catalogue
+# selection; Reactome via text search) returns whole, explicitly-chosen pathways,
+# so there is no hub-gene blowup to undo. Relevance is judged centrally by the
+# LLM gate over the pooled candidates — WITHOUT any hardcoded pathway names/IDs.
+#
+# The hypergeometric seed-enrichment stage is therefore OFF by default: it exists
+# only to counter gene-based expansion, and applied here it would wrongly drop a
+# canonical pathway the LLM explicitly selected just because its overlap with the
+# planner's seed list is low. Re-enable with PW_ENRICHMENT=1 if gene-based
+# discovery is reintroduced.
+ENRICHMENT_ENABLED = os.getenv("PW_ENRICHMENT", "0") != "0"
 # Background gene universe for the hypergeometric test (protein-coding genome).
 ENRICHMENT_BACKGROUND_SIZE = int(os.getenv("PW_ENRICHMENT_BACKGROUND", "20000"))
 # BH-adjusted p-value cutoff; a pathway must be enriched for the seed set to pass.

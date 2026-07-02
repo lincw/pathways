@@ -1,24 +1,29 @@
-"""KEGG REST API tools — gene-based pathway lookup.
+"""KEGG REST API tools — pathway-anchored catalogue selection.
 
-Instead of text search (which fails for multi-word scientific terms), we use
-gene-based lookup: for each seed gene, find all human pathways containing it.
-This is more reliable and biologically complete.
+The unit of collection is the pathway, not the gene. We fetch KEGG's human
+pathway catalogue (/list/pathway/hsa) and let the LLM pick the pathway IDs that
+belong to the queried signaling cascade, then take each selected pathway's FULL
+member-gene list wholesale. This mirrors the SIGNOR tool and replaces the old
+gene-seed lookup, which pulled in every pathway sharing a promiscuous hub gene
+(the hub-gene blowup) and made the collected set depend on which seed genes the
+planner LLM happened to invent.
 
 Flow:
-  gene_symbol → KEGG gene ID (/find/hsa/{symbol})
-              → pathway IDs  (/link/pathway/{kegg_id})
-              → pathway data (/get/{pathway_id})
+  query + search_terms → LLM selects pathway IDs from /list/pathway/hsa
+                       → pathway data (/get/{pathway_id}) → full gene membership
 """
 
 import re
 import time
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 import requests
+from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from scripts.config import KEGG_BASE
+from scripts.llm import call_llm_structured
 from scripts.state import PathwayEntry
 
 # KGML relation subtypes → normalised effect / mechanism.
@@ -40,120 +45,144 @@ def _kegg_get(endpoint: str) -> str:
     return resp.text
 
 
-def _get_kegg_gene_id(gene_symbol: str) -> Optional[str]:
-    """Resolve a gene symbol to a KEGG human gene ID (e.g. 'TLR4' → 'hsa:7100')."""
-    try:
-        raw = _kegg_get(f"/find/hsa/{gene_symbol}")
-        for line in raw.strip().splitlines():
-            parts = line.split("\t", 1)
-            if len(parts) == 2:
-                kegg_id = parts[0].strip()        # "hsa:7100"
-                description = parts[1].upper()    # "TLR4; TOLL-LIKE RECEPTOR 4..."
-                if gene_symbol.upper() in description:
-                    return kegg_id
-        # fallback: return first result if any
-        first = raw.strip().splitlines()
-        if first:
-            return first[0].split("\t")[0].strip()
-    except Exception:
-        pass
-    return None
+def _pathway_catalogue() -> List[dict]:
+    """Return all human KEGG pathways as {id, name} dicts (/list/pathway/hsa).
+
+    IDs come back bare (e.g. 'hsa04620'); the trailing ' - Homo sapiens (human)'
+    suffix on names is stripped so the LLM sees clean pathway titles.
+    """
+    raw = _kegg_get("/list/pathway/hsa")
+    out: List[dict] = []
+    for line in raw.strip().splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) == 2:
+            pid = parts[0].strip()
+            name = parts[1].split(" - Homo sapiens")[0].strip()
+            out.append({"id": pid, "name": name})
+    return out
 
 
-def _get_pathway_ids_for_gene(kegg_gene_id: str) -> List[str]:
-    """Return human pathway IDs (e.g. 'hsa04620') containing the given gene."""
-    try:
-        raw = _kegg_get(f"/link/pathway/{kegg_gene_id}")
-        ids = []
-        for line in raw.strip().splitlines():
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                pid = parts[1].strip()   # "path:hsa04620"
-                if "hsa" in pid:
-                    ids.append(pid.replace("path:", ""))
-        return ids
-    except Exception:
-        return []
-
-
-def _get_pathway_genes(pathway_id: str) -> List[str]:
-    """Extract gene symbols from a KEGG pathway flat file."""
-    try:
-        raw = _kegg_get(f"/get/{pathway_id}")
-    except Exception:
-        return []
-
-    genes = []
+def _parse_pathway_flatfile(pathway_id: str, raw: str) -> tuple[str, str, List[str]]:
+    """Parse NAME, DESCRIPTION, and the full GENE membership from a KEGG flat file."""
+    name, desc = pathway_id, ""
+    genes: List[str] = []
     in_gene_section = False
     for line in raw.splitlines():
+        if line.startswith("NAME"):
+            name = re.sub(r"\s+", " ", line[4:]).strip()
+            name = name.split(" - Homo sapiens")[0].strip()
+        elif line.startswith("DESCRIPTION"):
+            desc = re.sub(r"\s+", " ", line[11:]).strip()
+
         if line.startswith("GENE"):
             in_gene_section = True
         elif re.match(r"^[A-Z]", line) and not line.startswith("GENE"):
             in_gene_section = False
         if in_gene_section:
             # Format: "GENE        12345  SYMBOL; full name [KO:...]"
-            match = re.search(r"\d+\s+([A-Za-z][A-Z0-9a-z]+);", line)
-            if match:
-                genes.append(match.group(1))
-    return list(dict.fromkeys(genes))  # deduplicate, preserve order
+            m = re.search(r"\d+\s+([A-Za-z][A-Z0-9a-z]+);", line)
+            if m:
+                genes.append(m.group(1))
+    return name, desc, list(dict.fromkeys(genes))
 
 
-def _get_pathway_name_and_desc(pathway_id: str, raw: str) -> tuple[str, str]:
-    """Parse NAME and DESCRIPTION from a KEGG pathway flat file."""
-    name, desc = pathway_id, ""
-    for line in raw.splitlines():
-        if line.startswith("NAME"):
-            name = re.sub(r"\s+", " ", line[4:]).strip().rstrip(" - Homo sapiens (human)")
-        if line.startswith("DESCRIPTION"):
-            desc = re.sub(r"\s+", " ", line[11:]).strip()
-    return name, desc
+def _pathway_entry(pathway_id: str) -> Optional[PathwayEntry]:
+    """Fetch one KEGG pathway and build a PathwayEntry with full gene membership."""
+    try:
+        raw = _kegg_get(f"/get/{pathway_id}")
+    except Exception as exc:
+        print(f"  [KEGG] skipping {pathway_id}: {exc}", flush=True)
+        return None
+    name, desc, genes = _parse_pathway_flatfile(pathway_id, raw)
+    return PathwayEntry(
+        source="KEGG",
+        pathway_id=pathway_id,
+        pathway_name=name,
+        genes=genes,
+        description=desc,
+    )
 
 
-def fetch_pathways(seed_genes: List[str]) -> List[PathwayEntry]:
-    """Main entry: find all KEGG pathways containing any of the seed genes."""
-    seen_pathway_ids: Set[str] = set()
+class _KeggPathwaySelection(BaseModel):
+    pathway_ids: List[str] = Field(
+        description="KEGG human pathway IDs (e.g. ['hsa04620', 'hsa04064']) whose "
+                    "core machinery is part of the queried signaling pathway"
+    )
+
+
+def _llm_select_pathways(
+    query: str,
+    search_terms: List[str],
+    catalogue: List[dict],
+) -> List[str]:
+    """Ask the LLM which KEGG pathways to collect, from the full human catalogue.
+
+    This is the KEGG *entry* mechanism — proposing candidate pathways — mirroring
+    the SIGNOR tool. Final relevance filtering over the pooled candidates from all
+    three databases happens centrally in the pathway_filter node's LLM gate.
+    """
+    listing = "\n".join(f"  {p['id']}: {p['name']}" for p in catalogue)
+    terms_text = "\n".join(f"  - {t}" for t in search_terms) if search_terms else "  (none)"
+
+    prompt = f"""You are a molecular biologist selecting pathway maps for an analysis.
+
+Biological query: {query}
+
+Specific signaling components the search should cover:
+{terms_text}
+
+From the KEGG human pathway catalogue below, select the pathway IDs whose core
+signaling machinery is DIRECTLY part of, or immediately upstream/downstream of,
+the queried pathway — its receptors, adaptors, kinases, ubiquitin ligases,
+transcription factors, and downstream effectors. Include pathways that share key
+signaling components. EXCLUDE broad disease maps or unrelated processes (cancer,
+neurodegeneration, metabolism, other infections) that merely share a hub gene.
+Aim for 5-15 pathways.
+
+KEGG catalogue:
+{listing}
+"""
+    result = call_llm_structured(
+        prompt,
+        _KeggPathwaySelection,
+        desc="KEGG: selecting relevant pathways...",
+    )
+    valid = {p["id"] for p in catalogue}
+    return [pid for pid in result.pathway_ids if pid in valid]
+
+
+def fetch_pathways(query: str, search_terms: List[str]) -> List[PathwayEntry]:
+    """Collect KEGG pathways for *query* by LLM selection from the catalogue.
+
+    Pathway-anchored: the LLM picks pathway IDs and we take each one's FULL gene
+    membership. No gene-seed expansion (which pulled in every pathway sharing a
+    hub gene and made the result depend on the planner's invented seed list).
+    """
+    try:
+        catalogue = _pathway_catalogue()
+    except Exception as exc:
+        print(f"  [KEGG] failed to list pathways: {exc}", flush=True)
+        return []
+
+    try:
+        selected_ids = _llm_select_pathways(query, search_terms, catalogue)
+    except Exception as exc:
+        print(f"  [KEGG] LLM selection failed: {exc}", flush=True)
+        return []
+
     entries: List[PathwayEntry] = []
-
-    total = len(seed_genes)
-    for i, gene in enumerate(seed_genes, 1):
-        print(f"  [KEGG] {i}/{total} {gene}...", flush=True)
-        kegg_id = _get_kegg_gene_id(gene)
-        if not kegg_id:
+    seen: set = set()
+    for pid in selected_ids:
+        if pid in seen:
             continue
-        time.sleep(0.2)
+        seen.add(pid)
+        print(f"  [KEGG] {pid}...", flush=True)
+        entry = _pathway_entry(pid)
+        if entry:
+            entries.append(entry)
+        time.sleep(0.3)
 
-        pathway_ids = _get_pathway_ids_for_gene(kegg_id)
-        for pid in pathway_ids:
-            if pid in seen_pathway_ids:
-                continue
-            seen_pathway_ids.add(pid)
-            try:
-                raw = _kegg_get(f"/get/{pid}")
-                name, desc = _get_pathway_name_and_desc(pid, raw)
-                # Parse genes directly from the already-fetched flat file
-                gene_list = []
-                in_section = False
-                for line in raw.splitlines():
-                    if line.startswith("GENE"):
-                        in_section = True
-                    elif re.match(r"^[A-Z]", line) and not line.startswith("GENE"):
-                        in_section = False
-                    if in_section:
-                        m = re.search(r"\d+\s+([A-Za-z][A-Z0-9a-z]+);", line)
-                        if m:
-                            gene_list.append(m.group(1))
-                entries.append(PathwayEntry(
-                    source="KEGG",
-                    pathway_id=pid,
-                    pathway_name=name,
-                    genes=list(dict.fromkeys(gene_list)),
-                    description=desc,
-                ))
-                time.sleep(0.3)
-            except Exception as exc:
-                print(f"  [KEGG] skipping {pid}: {exc}", flush=True)
-
-    print(f"  [KEGG] {len(seed_genes)} seed genes → {len(entries)} pathways")
+    print(f"  [KEGG] selected {len(entries)} pathways from catalogue of {len(catalogue)}")
     return entries
 
 

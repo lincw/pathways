@@ -1,7 +1,9 @@
 """Planner agent
 
-Generates search terms (for Reactome/WikiPathways text search) AND seed genes
-(for KEGG gene-based pathway lookup). On re-runs uses gap info from critic.
+Generates search terms that drive collection from all three databases (Reactome
+text search; KEGG and SIGNOR LLM catalogue selection use them as hints) plus a
+small set of representative seed genes used as context. On re-runs uses gap info
+from critic.
 """
 
 from __future__ import annotations
@@ -20,7 +22,8 @@ class PlannerOutput(BaseModel):
         description="6-10 search strings for Reactome and WikiPathways text search"
     )
     seed_genes: List[str] = Field(
-        description="10-20 gene symbols (e.g. TLR4, MYD88, TRAF6) for KEGG gene-based lookup"
+        description="10-20 representative core gene symbols (e.g. TLR4, MYD88, "
+                    "TRAF6) — context/hints for pathway selection, not a lookup key"
     )
     plan: str = Field(description="2-3 sentence retrieval strategy")
 
@@ -36,12 +39,14 @@ Goal: {query}
 
 Generate, specifically for the pathway named in the Goal (do not default to any
 other pathway):
-1. search_terms: 6-10 text strings for searching Reactome and WikiPathways databases.
-   Cover the canonical cascade name, its key branches, and its major outputs.
+1. search_terms: 6-10 text strings that name this signaling pathway and its parts.
+   These drive collection from all three databases (Reactome text search; KEGG and
+   SIGNOR pathway selection). Cover the canonical cascade name, its key branches,
+   and its major outputs.
 
-2. seed_genes: 10-20 human gene symbols for KEGG gene-based pathway lookup.
-   Span the pathway's receptors, adaptors, kinases/enzymes, ubiquitin ligases,
-   transcription factors, and negative regulators.
+2. seed_genes: 10-20 human gene symbols representative of the pathway's core
+   machinery — receptors, adaptors, kinases/enzymes, ubiquitin ligases,
+   transcription factors, and negative regulators. Used as context, not a lookup key.
 
 3. plan: brief strategy description.
 """
@@ -55,8 +60,8 @@ Coverage gaps identified:
 {json.dumps(gaps, indent=2)}
 
 Generate NEW (non-overlapping) terms and genes targeting these gaps:
-- search_terms: 4-6 NEW text strings for Reactome/WikiPathways
-- seed_genes: 5-10 NEW gene symbols for KEGG
+- search_terms: 4-6 NEW text strings to re-drive collection from all three databases
+- seed_genes: 5-10 NEW representative gene symbols for the missing components
 - plan: how these address the gaps
 """
 

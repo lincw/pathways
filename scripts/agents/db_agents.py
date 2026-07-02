@@ -1,7 +1,9 @@
 """Parallel database agent nodes
 
-KEGG uses seed_genes (gene-based pathway lookup).
-Reactome and SIGNOR use search_terms (text/keyword search).
+All three databases are symmetric entry points and each returns whole pathways
+(full gene membership), selected by LLM from that database's catalogue (KEGG,
+SIGNOR) or by text search (Reactome). Central relevance filtering over the pooled
+candidates happens later in the pathway_filter node.
 """
 
 from scripts.state import PipelineState
@@ -9,10 +11,11 @@ from scripts.tools import kegg_tools, reactome_tools, signor_tools
 
 
 def kegg_agent_node(state: PipelineState) -> dict:
-    seed_genes = state.get("seed_genes", [])
-    print(f"  [KEGG] starting with {len(seed_genes)} seed genes: {seed_genes[:5]}", flush=True)
+    query = state.get("query", "")
+    search_terms = state.get("search_terms", [])
+    print(f"  [KEGG] asking LLM to select relevant pathways...", flush=True)
     try:
-        pathways = kegg_tools.fetch_pathways(seed_genes)
+        pathways = kegg_tools.fetch_pathways(query, search_terms)
     except Exception as exc:
         print(f"  [KEGG] ERROR: {exc}", flush=True)
         pathways = []

@@ -31,10 +31,12 @@ class CriticOutput(BaseModel):
         description="Required components NOT yet found in current pathways/genes"
     )
     additional_search_terms: List[str] = Field(
-        description="2-5 text search terms for Reactome/WikiPathways to fill gaps"
+        description="2-5 text search terms to fill gaps — re-drive pathway "
+                    "collection from all three databases"
     )
     additional_seed_genes: List[str] = Field(
-        description="3-8 gene symbols for KEGG gene-based lookup to fill gaps"
+        description="3-8 representative gene symbols for the missing components "
+                    "(context/hints for gap-filling, not a lookup key)"
     )
     is_sufficient: bool = Field(
         description="True only if all critical components are represented"
